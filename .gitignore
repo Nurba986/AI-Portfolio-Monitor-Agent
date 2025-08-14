@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+portfolio-env/
+venv/
+ENV/
+env/
+.venv
+
+# Environment Variables & Secrets
+.env
+.env.yaml
+.env.yml
+*.env
+
+# Google Cloud
+.gcloudignore
+gcp-credentials.json
+service-account-key.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Personal data
+personal_targets.py
+my_*.py
+test_results/
+backups/
+
+# API Keys (additional protection)
+*api_key*
+*secret*
+*password*
+*token*
+
+# Local configuration overrides
+local_config.py
+config_override.yaml

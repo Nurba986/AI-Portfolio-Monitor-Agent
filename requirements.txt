@@ -1,0 +1,7 @@
+functions-framework==3.*
+yfinance
+pytz
+beautifulsoup4
+requests
+google-cloud-firestore
+anthropic
