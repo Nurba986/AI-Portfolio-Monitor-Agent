@@ -4,13 +4,13 @@
 - **Monitors 5 stocks** (ASML, SNY, JD, UNH, XOM) automatically in Google Cloud
 - **Sends email alerts** when stocks hit buy/sell targets  
 - **Updates targets monthly** using Claude AI analysis
-- **Runs 24/7** even when your computer is off
+- **Runs during market hours** (9 AM - 5 PM ET, Mon-Fri, excluding holidays)
 
 ## 🚀 Quick Status Check
 - **✅ DEPLOYED**: Both functions running on Google Cloud Platform
 - **✅ SCHEDULER**: 2 jobs active (hourly monitoring + monthly updates)  
 - **✅ TESTED**: Email alerts and AI analysis working
-- **📧 EMAIL**: Notifications every hour (only when alerts found)
+- **📧 EMAIL**: Notifications during market hours only (when alerts found)
 
 ## 🔧 Testing Commands (Run Locally First)
 ```bash
@@ -49,7 +49,8 @@ Portfolio-Agent/
 ```
 
 ### **Cloud Functions (in main.py)**
-1. **`portfolio_monitor()`** - Runs every hour
+1. **`portfolio_monitor()`** - Runs every hour during market hours
+   - Checks if market is open (9 AM - 5 PM ET, Mon-Fri, excluding holidays)
    - Gets current stock prices from Yahoo Finance
    - Compares to buy/sell targets
    - Sends email alerts when targets hit
@@ -62,19 +63,20 @@ Portfolio-Agent/
    - Cost: ~$2.50/month
 
 ### **Google Cloud Scheduler Jobs**
-- **portfolio-monitor-job**: Every hour (`0 * * * *`)
+- **portfolio-monitor-job**: Every hour (`0 * * * *`) - function checks market hours internally
 - **monthly-target-update-job**: Monthly (`0 9 1 * *`)
 - **Location**: us-central1
 - **Timezone**: America/New_York
+- **Market hours**: Function automatically skips weekends, holidays, and after-hours
 
 ## 🎯 How It Works (Simple Explanation)
 1. **Monthly** (1st of month): AI analyzes each stock and sets new buy/sell targets
-2. **Hourly** (24/7): Checks current prices vs targets, emails you if buy/sell signals found  
-3. **Automatic**: Everything runs in Google Cloud without your computer
+2. **Hourly** (market hours only): Checks current prices vs targets, emails you if buy/sell signals found  
+3. **Automatic**: Everything runs in Google Cloud without your computer during market hours
 
 ## 🔍 Key Features
 - **Smart Targets**: AI-powered buy/sell prices updated monthly
-- **Real-time Monitoring**: Stock prices checked every hour
+- **Market Hours Monitoring**: Stock prices checked every hour during market hours (9 AM - 5 PM ET, Mon-Fri, excluding holidays)
 - **Email Alerts**: Only get notified when action is needed
 - **Confidence Scoring**: AI rates its target confidence (1-10)
 - **Fallback System**: Uses hardcoded targets if AI fails

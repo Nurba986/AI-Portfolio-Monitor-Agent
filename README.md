@@ -18,7 +18,8 @@ Automated stock portfolio monitoring system that runs 24/7 on Google Cloud Platf
 ## 🚀 Features
 
 ### **Automated Monitoring**
-- Checks 5 stocks every hour (ASML, SNY, JD, UNH, XOM)
+- Checks 5 stocks during market hours only (ASML, SNY, JD, UNH, XOM)
+- Runs 9:00 AM - 5:00 PM ET, Monday-Friday, excluding holidays
 - Compares current prices to AI-generated targets
 - Sends email alerts with confidence scores and reasoning
 
@@ -115,11 +116,13 @@ gcloud functions deploy monthly-target-update \
 gcloud scheduler jobs create http portfolio-monitor-job \
   --location=us-central1 \
   --schedule="0 * * * *" \
+  --time-zone="America/New_York" \
   --uri=https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/portfolio-monitor
 
 gcloud scheduler jobs create http monthly-target-update-job \
   --location=us-central1 \
   --schedule="0 9 1 * *" \
+  --time-zone="America/New_York" \
   --uri=https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/monthly-target-update
 ```
 
@@ -178,9 +181,9 @@ The system performs monthly AI analysis on the 1st of each month at 9 AM EST, up
 - Key catalysts and risk factors
 
 ### Alert Frequency
-- **Monitoring**: Every hour, 24/7
+- **Monitoring**: Every hour during market hours (9 AM - 5 PM ET, Mon-Fri, excluding holidays)
 - **Target Updates**: Monthly (1st of month)
-- **Email Alerts**: Only when signals are triggered
+- **Email Alerts**: Only when signals are triggered during market hours
 
 ## 🔍 Monitoring & Logs
 

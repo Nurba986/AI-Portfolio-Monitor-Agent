@@ -9,7 +9,7 @@ import yfinance as yf
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, date
 import json
 import os
 import requests
@@ -18,6 +18,7 @@ import re
 from google.cloud import firestore
 import logging
 import anthropic
+import pytz
 
 # Your portfolio targets from your spreadsheet
 PORTFOLIO = {
@@ -43,14 +44,87 @@ PORTFOLIO = {
     }
 }
 
+# US Stock Market Holidays (major ones that affect trading)
+US_MARKET_HOLIDAYS_2025 = [
+    date(2025, 1, 1),   # New Year's Day
+    date(2025, 1, 20),  # Martin Luther King Jr. Day
+    date(2025, 2, 17),  # Presidents' Day
+    date(2025, 4, 18),  # Good Friday
+    date(2025, 5, 26),  # Memorial Day
+    date(2025, 6, 19),  # Juneteenth
+    date(2025, 7, 4),   # Independence Day
+    date(2025, 9, 1),   # Labor Day
+    date(2025, 11, 27), # Thanksgiving
+    date(2025, 12, 25), # Christmas
+]
+
+# Add 2026 holidays for year transition
+US_MARKET_HOLIDAYS_2026 = [
+    date(2026, 1, 1),   # New Year's Day
+    date(2026, 1, 19),  # Martin Luther King Jr. Day
+    date(2026, 2, 16),  # Presidents' Day
+    date(2026, 4, 3),   # Good Friday
+    date(2026, 5, 25),  # Memorial Day
+    date(2026, 6, 19),  # Juneteenth
+    date(2026, 7, 3),   # Independence Day (observed)
+    date(2026, 9, 7),   # Labor Day
+    date(2026, 11, 26), # Thanksgiving
+    date(2026, 12, 25), # Christmas
+]
+
+ALL_MARKET_HOLIDAYS = US_MARKET_HOLIDAYS_2025 + US_MARKET_HOLIDAYS_2026
+
+def is_market_open():
+    """
+    Check if the US stock market is currently open
+    Returns: (is_open: bool, reason: str)
+    """
+    # Get current time in Eastern Time (market timezone)
+    et_tz = pytz.timezone('America/New_York')
+    now_et = datetime.now(et_tz)
+    current_date = now_et.date()
+    current_time = now_et.time()
+    
+    # Check if today is a weekend (Saturday = 5, Sunday = 6)
+    if now_et.weekday() >= 5:
+        return False, f"Weekend (day {now_et.weekday()})"
+    
+    # Check if today is a market holiday
+    if current_date in ALL_MARKET_HOLIDAYS:
+        return False, f"Market holiday: {current_date}"
+    
+    # Check if current time is within market hours (9:00 AM - 5:00 PM ET)
+    market_open = current_time.replace(second=0, microsecond=0) >= datetime.strptime("09:00", "%H:%M").time()
+    market_close = current_time.replace(second=0, microsecond=0) <= datetime.strptime("17:00", "%H:%M").time()
+    
+    if not (market_open and market_close):
+        return False, f"Outside market hours: {current_time.strftime('%H:%M')} ET (market: 9:00-17:00)"
+    
+    return True, f"Market open: {current_time.strftime('%H:%M')} ET"
+
 @functions_framework.http
 def portfolio_monitor(request):
     """
     Enhanced main function that checks portfolio and sends alerts using dynamic targets
+    Only runs during market hours (9 AM - 5 PM ET, Mon-Fri, excluding holidays)
     """
     
     try:
         print("🔄 Starting enhanced portfolio check...")
+        
+        # Check if market is open first
+        market_open, reason = is_market_open()
+        
+        if not market_open:
+            print(f"⏸️ Market closed: {reason}")
+            return {
+                "status": "skipped",
+                "timestamp": datetime.now().isoformat(),
+                "reason": reason,
+                "message": "Portfolio monitoring skipped - market closed"
+            }
+        
+        print(f"✅ Market is open: {reason}")
         
         # Load current targets from Firestore (with fallback to hardcoded)
         dynamic_targets = load_targets_from_firestore()

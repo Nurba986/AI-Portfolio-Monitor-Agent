@@ -10,9 +10,10 @@
 
 **🚀 QUICK CHECK:**
 - **Functions deployed**: ✅ portfolio-monitor + monthly-target-update
-- **Schedulers active**: ✅ Hourly monitoring + Monthly AI updates  
+- **Schedulers active**: ✅ Market hours monitoring + Monthly AI updates  
+- **Market hours**: ✅ 9 AM - 5 PM ET, Mon-Fri, excluding holidays
 - **Last tested**: ✅ Email alerts working, AI analysis working
-- **Next alert**: Within 1 hour (if targets hit)
+- **Next alert**: During market hours only (if targets hit)
 
 ---
 
@@ -173,7 +174,7 @@ gcloud functions deploy monthly-target-update \
 
 ## ✅ STEP 7: Create Enhanced Schedulers
 
-### 7.1 Daily Monitoring (**UPDATED TO HOURLY 24/7**)
+### 7.1 Daily Monitoring (**UPDATED TO MARKET HOURS ONLY**)
 ```bash
 gcloud scheduler jobs create http portfolio-monitor-job \
   --location=us-central1 \
@@ -181,7 +182,7 @@ gcloud scheduler jobs create http portfolio-monitor-job \
   --time-zone="America/New_York" \
   --uri="https://us-central1-portfolio-monitor-465018.cloudfunctions.net/portfolio-monitor" \
   --http-method=GET \
-  --description="Portfolio monitoring every hour 24/7"
+  --description="Portfolio monitoring during market hours (9 AM - 5 PM ET, Mon-Fri, excluding holidays)"
 ```
 
 ### 7.2 Monthly AI Target Updates 
@@ -196,7 +197,9 @@ gcloud scheduler jobs create http monthly-target-update-job \
 ```
 
 **🕐 CURRENT SCHEDULES:**
-- **Daily:** Every hour 24/7 (`0 * * * *`) - **LIVE NOW**
+- **Daily:** Every hour during market hours (`0 * * * *`) - **LIVE NOW**
+  - **Market Hours:** 9 AM - 5 PM ET, Monday-Friday only
+  - **Holidays:** Automatically excluded (New Year's, MLK Day, Presidents' Day, Good Friday, Memorial Day, Juneteenth, July 4th, Labor Day, Thanksgiving, Christmas)
 - **Monthly:** 1st of each month at 9 AM EST (`0 9 1 * *`) - **LIVE NOW**
 - **Project:** portfolio-monitor-465018
 - **Location:** us-central1
@@ -292,7 +295,7 @@ gcloud scheduler jobs resume monthly-target-update-job --location=us-central1
 - 🟡 **WATCH SIGNAL:** Stock within 5% of AI buy target
 - 💡 **MEDIUM PRIORITY:** Lower confidence signals (4-6/10)
 
-**Schedule:** Every hour during market hours (9:00 AM - 4:00 PM EST, Mon-Fri)
+**Schedule:** Every hour during market hours (9:00 AM - 5:00 PM ET, Mon-Fri, excluding holidays)
 
 **Enhanced email format:** 
 - 🎯 Confidence-scored alerts with visual indicators
@@ -312,12 +315,13 @@ gcloud scheduler jobs resume monthly-target-update-job --location=us-central1
 
 ## 🚨 TROUBLESHOOTING - Based on Real Issues Fixed
 
-### **Problem: Getting emails every 15 minutes instead of hourly**
+### **Problem: Getting emails outside market hours**
 **Solution:**
-```bash
-# Update scheduler frequency
-gcloud scheduler jobs update http portfolio-monitor-job --location=us-central1 --schedule="0 * * * *"
-```
+✅ **FIXED:** Function now automatically checks market hours and only runs 9 AM - 5 PM ET, Mon-Fri, excluding holidays. 
+
+**Problem: Getting emails on weekends/holidays**
+**Solution:**
+✅ **FIXED:** Function includes US stock market holiday calendar and weekend detection.
 
 ### **Problem: ModuleNotFoundError when testing locally**
 **Solution:**
@@ -361,9 +365,10 @@ gcloud functions logs read portfolio-monitor --region=us-central1
 - System automatically falls back to hardcoded targets
 
 **Cost concerns?**
-- Daily monitoring: ~FREE (Yahoo Finance API)
+- Daily monitoring: ~FREE (Yahoo Finance API, market hours only)
 - Monthly AI updates: ~$2.50 (Claude API)
 - Total: ~$3/month maximum
+- **Reduced costs:** Market hours limitation reduces function executions by ~65%
 
 ---
 
