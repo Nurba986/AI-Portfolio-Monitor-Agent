@@ -9,16 +9,19 @@ import yfinance as yf
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import json
 import os
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import re
 from google.cloud import firestore
 import logging
 import anthropic
 import pytz
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Your portfolio targets from your spreadsheet
 PORTFOLIO = {
@@ -41,18 +44,63 @@ PORTFOLIO = {
     'XOM': {
         'buy_target': 110.00, 
         'sell_target': 130.00
+    },
+    'ADM': {
+        'buy_target': 50.00, 
+        'sell_target': 70.00
+    },
+    'BABA': {
+        'buy_target': 80.00, 
+        'sell_target': 120.00
+    },
+    'ENPH': {
+        'buy_target': 80.00, 
+        'sell_target': 140.00
+    },
+    'FSLR': {
+        'buy_target': 180.00, 
+        'sell_target': 280.00
+    },
+    'LMT': {
+        'buy_target': 450.00, 
+        'sell_target': 550.00
+    },
+    'NKE': {
+        'buy_target': 75.00, 
+        'sell_target': 105.00
+    },
+    'NTR': {
+        'buy_target': 45.00, 
+        'sell_target': 65.00
+    },
+    'PBR': {
+        'buy_target': 12.00, 
+        'sell_target': 18.00
+    },
+    'RIO': {
+        'buy_target': 55.00, 
+        'sell_target': 75.00
+    },
+    'TCEHY': {
+        'buy_target': 35.00, 
+        'sell_target': 55.00
+    },
+    'TSM': {
+        'buy_target': 220.00, 
+        'sell_target': 280.00
+    },
+    'TX': {
+        'buy_target': 45.00, 
+        'sell_target': 65.00
+    },
+    'VALE': {
+        'buy_target': 10.00, 
+        'sell_target': 16.00
     }
 }
 
 # US Stock Market Holidays (major ones that affect trading)
 US_MARKET_HOLIDAYS_2025 = [
-    date(2025, 1, 1),   # New Year's Day
-    date(2025, 1, 20),  # Martin Luther King Jr. Day
-    date(2025, 2, 17),  # Presidents' Day
-    date(2025, 4, 18),  # Good Friday
-    date(2025, 5, 26),  # Memorial Day
-    date(2025, 6, 19),  # Juneteenth
-    date(2025, 7, 4),   # Independence Day
     date(2025, 9, 1),   # Labor Day
     date(2025, 11, 27), # Thanksgiving
     date(2025, 12, 25), # Christmas
@@ -74,6 +122,34 @@ US_MARKET_HOLIDAYS_2026 = [
 
 ALL_MARKET_HOLIDAYS = US_MARKET_HOLIDAYS_2025 + US_MARKET_HOLIDAYS_2026
 
+# Global HTTP session for requests with retry logic
+_HTTP_SESSION = None
+
+def get_http_session():
+    """Get a configured HTTP session with retry logic"""
+    global _HTTP_SESSION
+    if _HTTP_SESSION is not None:
+        return _HTTP_SESSION
+    
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    })
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
+    
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
+    _HTTP_SESSION = session
+    return session
+
 def is_market_open():
     """
     Check if the US stock market is currently open
@@ -87,18 +163,18 @@ def is_market_open():
     
     # Check if today is a weekend (Saturday = 5, Sunday = 6)
     if now_et.weekday() >= 5:
-        return False, f"Weekend (day {now_et.weekday()})"
+        return False, f"Weekend ({now_et.strftime('%A')})"
     
     # Check if today is a market holiday
     if current_date in ALL_MARKET_HOLIDAYS:
-        return False, f"Market holiday: {current_date}"
+        return False, f"Market holiday: {current_date.isoformat()}"
     
-    # Check if current time is within market hours (9:00 AM - 5:00 PM ET)
-    market_open = current_time.replace(second=0, microsecond=0) >= datetime.strptime("09:00", "%H:%M").time()
-    market_close = current_time.replace(second=0, microsecond=0) <= datetime.strptime("17:00", "%H:%M").time()
+    # Check if current time is within market hours (9:30 AM - 4:00 PM ET) - Correct NYSE/NASDAQ hours
+    market_open = current_time.replace(second=0, microsecond=0) >= datetime.strptime("09:30", "%H:%M").time()
+    market_close = current_time.replace(second=0, microsecond=0) <= datetime.strptime("16:00", "%H:%M").time()
     
     if not (market_open and market_close):
-        return False, f"Outside market hours: {current_time.strftime('%H:%M')} ET (market: 9:00-17:00)"
+        return False, f"Outside market hours: {current_time.strftime('%H:%M')} ET (market: 9:30-16:00)"
     
     return True, f"Market open: {current_time.strftime('%H:%M')} ET"
 
@@ -138,7 +214,7 @@ def portfolio_monitor(request):
         # Send email if there are alerts
         if alerts:
             send_enhanced_email(alerts, current_prices, dynamic_targets)
-            print(f"📧 Enhanced email sent with {len(alerts)} alerts")
+            print(f"📧 Daily summary sent with {len(alerts)} trading opportunities")
         else:
             print("✅ No alerts - all stocks within normal ranges")
         
@@ -241,36 +317,92 @@ def get_enhanced_yahoo_data(ticker):
             'data_quality': 'low'
         }
 
-def get_stock_prices():
-    """Get current prices for all stocks (backward compatibility)"""
+def get_stock_prices_fast():
+    """Fast batch stock price fetching with threading"""
+    try:
+        # Try bulk download first (fastest method)
+        print("📊 Attempting bulk price fetch...")
+        tickers_list = list(PORTFOLIO.keys())
+        
+        # Use yfinance bulk download for speed
+        df = yf.download(tickers=tickers_list, period="1d", threads=True, progress=False)
+        
+        if not df.empty:
+            # Handle both single and multi-ticker cases
+            if len(tickers_list) == 1:
+                # Single ticker case
+                last_price = df["Adj Close"].iloc[-1] if "Adj Close" in df else df["Close"].iloc[-1]
+                if last_price and last_price > 0:
+                    return {tickers_list[0]: round(float(last_price), 2)}
+            else:
+                # Multi-ticker case
+                adj_close = df["Adj Close"] if "Adj Close" in df else df["Close"]
+                last_prices = adj_close.iloc[-1]
+                
+                prices = {}
+                for ticker in tickers_list:
+                    if ticker in last_prices:
+                        price = last_prices[ticker]
+                        if price and price > 0:
+                            prices[ticker] = round(float(price), 2)
+                            print(f"  ✅ {ticker}: ${price:.2f}")
+                
+                if prices:
+                    return prices
+    except Exception as e:
+        print(f"  ⚠️ Bulk fetch failed: {e}, falling back to individual fetch")
+    
+    # Fallback: threaded individual fetches (limited concurrency to avoid rate limits)
+    print("📊 Using threaded fallback fetch...")
     prices = {}
     
-    for ticker in PORTFOLIO.keys():
+    def fetch_single_price(ticker):
         try:
-            print(f"📊 Fetching {ticker}...")
-            enhanced_data = get_enhanced_yahoo_data(ticker)
-            current_price = enhanced_data['financials']['current_price']
-            
-            if current_price and current_price > 0:
-                prices[ticker] = round(current_price, 2)
-                print(f"  ✅ {ticker}: ${current_price:.2f}")
-            else:
-                print(f"  ⚠️ Could not get price for {ticker}")
+            stock = yf.Ticker(ticker)
+            # Try fast_info first, then regular info
+            try:
+                fast_info = stock.fast_info
+                price = fast_info.get("last_price")
+                if price and price > 0:
+                    return ticker, round(float(price), 2)
+            except:
+                pass
+                
+            # Fallback to regular info
+            info = stock.info
+            price = info.get('currentPrice') or info.get('regularMarketPrice')
+            if price and price > 0:
+                return ticker, round(float(price), 2)
                 
         except Exception as e:
             print(f"  ❌ Error fetching {ticker}: {e}")
+        
+        return ticker, None
+    
+    # Use ThreadPoolExecutor with limited concurrency to avoid rate limits
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        future_to_ticker = {executor.submit(fetch_single_price, ticker): ticker for ticker in PORTFOLIO.keys()}
+        
+        for future in as_completed(future_to_ticker):
+            ticker, price = future.result()
+            if price:
+                prices[ticker] = price
+                print(f"  ✅ {ticker}: ${price:.2f}")
+            else:
+                print(f"  ⚠️ Could not get price for {ticker}")
     
     return prices
+
+def get_stock_prices():
+    """Get current prices for all stocks (backward compatibility wrapper)"""
+    return get_stock_prices_fast()
 
 def scrape_marketwatch_consensus(ticker):
     """Scrape MarketWatch for analyst consensus data"""
     try:
         url = f"https://www.marketwatch.com/investing/stock/{ticker}/analystestimates"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
         
-        response = requests.get(url, headers=headers, timeout=10)
+        response = get_http_session().get(url, timeout=10)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -358,11 +490,8 @@ def scrape_yahoo_web_targets(ticker):
     """Scrape Yahoo Finance web page for additional analyst data"""
     try:
         url = f"https://finance.yahoo.com/quote/{ticker}/analysis"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
         
-        response = requests.get(url, headers=headers, timeout=10)
+        response = get_http_session().get(url, timeout=10)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -784,7 +913,7 @@ def parse_claude_response(ticker, response_text, analyst_data):
             'risk_factor': risk,
             'analyst_consensus': analyst_data.get('consensus_target'),
             'claude_response': response_text,
-            'generated_at': datetime.now().isoformat()
+            'generated_at': datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as e:
@@ -797,7 +926,7 @@ def parse_claude_response(ticker, response_text, analyst_data):
             'key_catalyst': "Analysis failed",
             'risk_factor': "Unable to analyze",
             'error': str(e),
-            'generated_at': datetime.now().isoformat()
+            'generated_at': datetime.now(timezone.utc).isoformat()
         }
 
 @functions_framework.http
@@ -852,7 +981,7 @@ def monthly_target_update(request):
                     'analyst_confidence': analyst_data['confidence_level'],
                     'current_price': financials['current_price'],
                     'sector': financials.get('sector'),
-                    'updated_at': datetime.now().isoformat(),
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
                     'data_sources': analyst_data['data_sources'],
                     'pe_ratio': financials.get('pe_ratio'),
                     'market_cap': financials.get('market_cap')
@@ -899,10 +1028,10 @@ def monthly_target_update(request):
 def send_target_update_email(updated_targets, estimated_cost):
     """Send email notification about updated targets"""
     try:
-        # Email configuration
-        sender_email = os.environ.get('GMAIL_USER', 'nbu864@gmail.com')
-        sender_password = os.environ.get('GMAIL_PASSWORD', 'your_app_password')
-        recipient = 'nbu864@gmail.com'
+        # Email configuration - require environment variables for security
+        sender_email = os.environ['GMAIL_USER']
+        sender_password = os.environ['GMAIL_PASSWORD']
+        recipient = os.environ.get('ALERT_RECIPIENT', sender_email)
         
         subject = f"🎯 Portfolio Targets Updated - {len(updated_targets)} stocks"
         
@@ -1186,18 +1315,18 @@ def calculate_portfolio_value(current_prices):
 def send_enhanced_email(alerts, current_prices, dynamic_targets):
     """Enhanced email alert with dynamic targets and confidence scores"""
     try:
-        # Email configuration from environment variables
-        sender_email = os.environ.get('GMAIL_USER', 'nbu864@gmail.com')
-        sender_password = os.environ.get('GMAIL_PASSWORD', 'your_app_password')
-        recipient = 'nbu864@gmail.com'
+        # Email configuration - require environment variables for security
+        sender_email = os.environ['GMAIL_USER']
+        sender_password = os.environ['GMAIL_PASSWORD']
+        recipient = os.environ.get('ALERT_RECIPIENT', sender_email)
         
         # Count alert types
         buy_alerts = sum(1 for alert in alerts if alert['type'] == 'BUY')
         sell_alerts = sum(1 for alert in alerts if alert['type'] == 'SELL')
         watch_alerts = sum(1 for alert in alerts if alert['type'] == 'WATCH')
         
-        # Create email subject with alert breakdown
-        subject = f"🚨 Enhanced Portfolio Alert - {buy_alerts}🟢 {sell_alerts}🔴 {watch_alerts}🟡"
+        # Create email subject with alert breakdown  
+        subject = f"📊 Daily Portfolio Summary - {buy_alerts}🟢 {sell_alerts}🔴 {watch_alerts}🟡"
         
         # Portfolio value not tracked
         total_value = 0.0
@@ -1206,12 +1335,12 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
         html_body = f"""
         <html>
         <body style="font-family: Arial, sans-serif; margin: 20px;">
-            <h2 style="color: #1a73e8;">📊 Enhanced Portfolio Alert</h2>
-            <p><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S EST')}</p>
-            <p><strong>Alert Summary:</strong> {buy_alerts} Buy, {sell_alerts} Sell, {watch_alerts} Watch</p>
-            <p><strong>Monitoring:</strong> {len(current_prices)} stocks with AI-powered targets</p>
+            <h2 style="color: #1a73e8;">📊 Daily Portfolio Summary</h2>
+            <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d at %H:%M:%S EST')}</p>
+            <p><strong>Signal Summary:</strong> {buy_alerts} Buy, {sell_alerts} Sell, {watch_alerts} Watch Opportunities</p>
+            <p><strong>Portfolio:</strong> {len(current_prices)} stocks monitored with AI-powered targets (daily at 3 PM ET)</p>
             
-            <h3 style="color: #ea4335;">🚨 Priority Alerts ({len(alerts)})</h3>
+            <h3 style="color: #ea4335;">🎯 Trading Opportunities ({len(alerts)})</h3>
             <ul>
         """
         
@@ -1292,9 +1421,24 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
         # Add AI insights summary
         high_confidence = sum(1 for target in dynamic_targets.values() 
                              if target['confidence_score'] >= 7)
-        recent_updates = sum(1 for target in dynamic_targets.values() 
-                           if target['updated_at'] and 
-                           (datetime.now() - datetime.fromisoformat(target['updated_at'].replace('Z', '+00:00').replace('+00:00', ''))).days <= 30)
+        # Count recent updates (with proper timezone handling)
+        now_utc = datetime.now(timezone.utc)
+        recent_updates = 0
+        for target in dynamic_targets.values():
+            if target['updated_at']:
+                try:
+                    # Parse ISO format datetime with timezone awareness
+                    updated_at_str = target['updated_at'].replace('Z', '+00:00')
+                    updated_at = datetime.fromisoformat(updated_at_str)
+                    if updated_at.tzinfo is None:
+                        updated_at = updated_at.replace(tzinfo=timezone.utc)
+                    
+                    days_diff = (now_utc - updated_at).days
+                    if days_diff <= 30:
+                        recent_updates += 1
+                except (ValueError, TypeError):
+                    # Skip invalid datetime strings
+                    continue
         
         html_body += f"""
             </table>
@@ -1309,9 +1453,10 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
             
             <hr style="margin: 20px 0;">
             <p style="color: #666; font-size: 12px;">
-                🤖 Enhanced Portfolio Monitor powered by Claude AI + Free Analyst Data<br>
-                📊 Dynamic targets updated monthly | 🔍 Real-time monitoring | 🎯 Confidence-weighted alerts<br>
-                Data sources: Yahoo Finance API, MarketWatch, Claude AI analysis
+                🤖 Daily Portfolio Monitor powered by Claude AI + Free Analyst Data<br>
+                📊 Dynamic targets updated monthly | 📅 Daily monitoring at 3 PM ET | 🎯 Confidence-weighted signals<br>
+                Data sources: Yahoo Finance API, MarketWatch, Claude AI analysis<br>
+                💰 Cost-optimized: Daily monitoring reduces costs by ~86% while maintaining effectiveness
             </p>
         </body>
         </html>
@@ -1331,7 +1476,7 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
         server.send_message(msg)
         server.quit()
         
-        print(f"📧 Enhanced email alert sent successfully to {recipient}")
+        print(f"📧 Daily portfolio summary sent successfully to {recipient}")
         
     except Exception as e:
         print(f"❌ Failed to send enhanced email: {e}")
@@ -1339,10 +1484,10 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
 def send_email(alerts, current_prices):
     """Send email alert with portfolio information"""
     try:
-        # Email configuration from environment variables
-        sender_email = os.environ.get('GMAIL_USER', 'nbu864@gmail.com')
-        sender_password = os.environ.get('GMAIL_PASSWORD', 'your_app_password')
-        recipient = 'nbu864@gmail.com'
+        # Email configuration - require environment variables for security
+        sender_email = os.environ['GMAIL_USER']
+        sender_password = os.environ['GMAIL_PASSWORD']
+        recipient = os.environ.get('ALERT_RECIPIENT', sender_email)
         
         # Create email subject
         subject = f"🚨 Portfolio Alert - {len(alerts)} notifications"

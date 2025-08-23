@@ -3,5 +3,6 @@ yfinance
 pytz
 beautifulsoup4
 requests
+urllib3
 google-cloud-firestore
 anthropic
