@@ -1,5 +1,5 @@
 functions-framework==3.*
-yfinance
+yfinance==0.2.18
 pytz
 beautifulsoup4
 requests

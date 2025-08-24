@@ -1,0 +1,430 @@
+"""
+Data collection services for Portfolio Agent
+Handles stock price fetching, web scraping, and analyst data aggregation
+"""
+
+import yfinance as yf
+from bs4 import BeautifulSoup
+import re
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from .utils import get_http_session, remove_outliers, calculate_confidence_level
+
+
+def get_enhanced_yahoo_data(ticker):
+    """Get comprehensive Yahoo Finance data including analyst targets and financials"""
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        
+        # Current price (multiple fallbacks)
+        current_price = (info.get('currentPrice') or 
+                        info.get('regularMarketPrice') or 
+                        info.get('ask') or 
+                        info.get('bid'))
+        
+        # Analyst targets
+        analyst_data = {
+            'target_mean': info.get('targetMeanPrice'),
+            'target_high': info.get('targetHighPrice'),
+            'target_low': info.get('targetLowPrice'),
+            'recommendation_mean': info.get('recommendationMean'),  # 1=Strong Buy, 5=Strong Sell
+            'analyst_count': info.get('numberOfAnalystOpinions')
+        }
+        
+        # Financial metrics for Claude analysis
+        financials = {
+            'current_price': current_price,
+            'market_cap': info.get('marketCap'),
+            'pe_ratio': info.get('trailingPE'),
+            'forward_pe': info.get('forwardPE'),
+            'peg_ratio': info.get('pegRatio'),
+            'price_to_book': info.get('priceToBook'),
+            'debt_to_equity': info.get('debtToEquity'),
+            'return_on_equity': info.get('returnOnEquity'),
+            'revenue_growth': info.get('revenueGrowth'),
+            'earnings_growth': info.get('earningsGrowth'),
+            'profit_margins': info.get('profitMargins'),
+            'operating_margins': info.get('operatingMargins'),
+            'free_cash_flow': info.get('freeCashflow'),
+            'total_cash': info.get('totalCash'),
+            'total_debt': info.get('totalDebt'),
+            'enterprise_value': info.get('enterpriseValue'),
+            'ebitda': info.get('ebitda'),
+            'revenue': info.get('totalRevenue'),
+            'sector': info.get('sector'),
+            'industry': info.get('industry'),
+            '52_week_high': info.get('fiftyTwoWeekHigh'),
+            '52_week_low': info.get('fiftyTwoWeekLow'),
+            'beta': info.get('beta'),
+            'dividend_yield': info.get('dividendYield')
+        }
+        
+        return {
+            'ticker': ticker,
+            'analyst_data': analyst_data,
+            'financials': financials,
+            'data_quality': 'high' if current_price and analyst_data.get('target_mean') else 'medium'
+        }
+        
+    except Exception as e:
+        print(f"   ❌ Error fetching enhanced data for {ticker}: {e}")
+        return {
+            'ticker': ticker,
+            'analyst_data': {},
+            'financials': {'current_price': None},
+            'data_quality': 'low'
+        }
+
+
+def get_stock_prices_fast(portfolio_tickers):
+    """Fast batch stock price fetching with threading"""
+    try:
+        # Try bulk download first (fastest method)
+        print(" Attempting bulk price fetch...")
+        tickers_list = list(portfolio_tickers)
+        
+        # Use yfinance bulk download for speed
+        df = yf.download(tickers=tickers_list, period="1d", threads=True, progress=False)
+        
+        if not df.empty:
+            # Handle both single and multi-ticker cases
+            if len(tickers_list) == 1:
+                # Single ticker case
+                last_price = df["Adj Close"].iloc[-1] if "Adj Close" in df else df["Close"].iloc[-1]
+                if last_price and last_price > 0:
+                    return {tickers_list[0]: round(float(last_price), 2)}
+            else:
+                # Multi-ticker case
+                adj_close = df["Adj Close"] if "Adj Close" in df else df["Close"]
+                last_prices = adj_close.iloc[-1]
+                
+                prices = {}
+                for ticker in tickers_list:
+                    if ticker in last_prices:
+                        price = last_prices[ticker]
+                        if price and price > 0:
+                            prices[ticker] = round(float(price), 2)
+                            print(f"    {ticker}: ${price:.2f}")
+                
+                if prices:
+                    return prices
+    except Exception as e:
+        print(f"     Bulk fetch failed: {e}, falling back to individual fetch")
+    
+    # Fallback: threaded individual fetches (limited concurrency to avoid rate limits)
+    print(" Using threaded fallback fetch...")
+    prices = {}
+    
+    def fetch_single_price(ticker):
+        try:
+            stock = yf.Ticker(ticker)
+            # Try fast_info first, then regular info
+            try:
+                fast_info = stock.fast_info
+                price = fast_info.get("last_price")
+                if price and price > 0:
+                    return ticker, round(float(price), 2)
+            except:
+                pass
+                
+            # Fallback to regular info
+            info = stock.info
+            price = info.get('currentPrice') or info.get('regularMarketPrice')
+            if price and price > 0:
+                return ticker, round(float(price), 2)
+                
+        except Exception as e:
+            print(f"   ❌ Error fetching {ticker}: {e}")
+        
+        return ticker, None
+    
+    # Use ThreadPoolExecutor with limited concurrency to avoid rate limits
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        future_to_ticker = {executor.submit(fetch_single_price, ticker): ticker for ticker in portfolio_tickers}
+        
+        for future in as_completed(future_to_ticker):
+            ticker, price = future.result()
+            if price:
+                prices[ticker] = price
+                print(f"    {ticker}: ${price:.2f}")
+            else:
+                print(f"     Could not get price for {ticker}")
+    
+    return prices
+
+
+def scrape_marketwatch_consensus(ticker):
+    """Scrape MarketWatch for analyst consensus data"""
+    try:
+        url = f"https://www.marketwatch.com/investing/stock/{ticker}/analystestimates"
+        
+        response = get_http_session().get(url, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Extract consensus target price
+        consensus_target = None
+        analyst_count = None
+        
+        # Look for price target in various possible locations
+        price_target_elements = soup.find_all(['span', 'div', 'td'], 
+                                            text=re.compile(r'\$[\d,]+\.?\d*'))
+        
+        for element in price_target_elements:
+            text = element.get_text()
+            if 'price target' in text.lower() or 'consensus' in text.lower():
+                # Extract price using regex
+                price_match = re.search(r'\$([0-9,]+\.?\d*)', text)
+                if price_match:
+                    consensus_target = float(price_match.group(1).replace(',', ''))
+                    break
+        
+        # Extract number of analysts
+        analyst_elements = soup.find_all(text=re.compile(r'\d+\s*analyst'))
+        for element in analyst_elements:
+            analyst_match = re.search(r'(\d+)\s*analyst', element)
+            if analyst_match:
+                analyst_count = int(analyst_match.group(1))
+                break
+        
+        # Extract rating distribution (Buy/Hold/Sell)
+        rating_distribution = {'buy': 0, 'hold': 0, 'sell': 0}
+        
+        # Look for rating counts
+        rating_elements = soup.find_all(['td', 'span'], text=re.compile(r'\d+'))
+        buy_keywords = ['buy', 'strong buy']
+        hold_keywords = ['hold', 'neutral']
+        sell_keywords = ['sell', 'strong sell']
+        
+        for element in rating_elements:
+            parent = element.parent
+            if parent:
+                parent_text = parent.get_text().lower()
+                element_text = element.get_text()
+                
+                if any(keyword in parent_text for keyword in buy_keywords):
+                    try:
+                        rating_distribution['buy'] = int(element_text)
+                    except ValueError:
+                        pass
+                elif any(keyword in parent_text for keyword in hold_keywords):
+                    try:
+                        rating_distribution['hold'] = int(element_text)
+                    except ValueError:
+                        pass
+                elif any(keyword in parent_text for keyword in sell_keywords):
+                    try:
+                        rating_distribution['sell'] = int(element_text)
+                    except ValueError:
+                        pass
+        
+        return {
+            'source': 'marketwatch',
+            'ticker': ticker,
+            'consensus_target': consensus_target,
+            'analyst_count': analyst_count,
+            'rating_distribution': rating_distribution,
+            'data_quality': 'high' if consensus_target and analyst_count else 'low',
+            'scraped_at': datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"     MarketWatch scraping failed for {ticker}: {e}")
+        return {
+            'source': 'marketwatch',
+            'ticker': ticker,
+            'consensus_target': None,
+            'analyst_count': None,
+            'rating_distribution': {'buy': 0, 'hold': 0, 'sell': 0},
+            'data_quality': 'failed',
+            'error': str(e),
+            'scraped_at': datetime.now().isoformat()
+        }
+
+
+def scrape_yahoo_web_targets(ticker):
+    """Scrape Yahoo Finance web page for additional analyst data"""
+    try:
+        url = f"https://finance.yahoo.com/quote/{ticker}/analysis"
+        
+        response = get_http_session().get(url, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Extract price targets from analyst section
+        target_elements = soup.find_all(['span', 'div'], 
+                                      text=re.compile(r'\d+\.\d+'))
+        
+        targets = {'mean': None, 'high': None, 'low': None}
+        
+        # Look for specific target labels
+        for element in target_elements:
+            parent_text = element.parent.get_text().lower() if element.parent else ""
+            value_text = element.get_text()
+            
+            try:
+                value = float(value_text)
+                if 'mean target' in parent_text or 'average' in parent_text:
+                    targets['mean'] = value
+                elif 'high target' in parent_text or 'highest' in parent_text:
+                    targets['high'] = value
+                elif 'low target' in parent_text or 'lowest' in parent_text:
+                    targets['low'] = value
+            except ValueError:
+                continue
+        
+        return {
+            'source': 'yahoo_web',
+            'ticker': ticker,
+            'targets': targets,
+            'data_quality': 'medium' if any(targets.values()) else 'low',
+            'scraped_at': datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"     Yahoo web scraping failed for {ticker}: {e}")
+        return {
+            'source': 'yahoo_web',
+            'ticker': ticker,
+            'targets': {'mean': None, 'high': None, 'low': None},
+            'data_quality': 'failed',
+            'error': str(e),
+            'scraped_at': datetime.now().isoformat()
+        }
+
+
+def collect_analyst_data(ticker):
+    """Collect analyst data from multiple free sources"""
+    print(f"=> Collecting analyst data for {ticker}...")
+    
+    data_sources = {}
+    
+    # Source 1: Enhanced Yahoo Finance API
+    try:
+        yahoo_data = get_enhanced_yahoo_data(ticker)
+        if yahoo_data['data_quality'] in ['high', 'medium']:
+            data_sources['yahoo_api'] = yahoo_data
+            print(f"    Yahoo API: {yahoo_data['data_quality']} quality")
+        else:
+            print(f"     Yahoo API: {yahoo_data['data_quality']} quality")
+    except Exception as e:
+        print(f"   ❌ Yahoo API failed: {e}")
+    
+    # Source 2: MarketWatch scraping
+    try:
+        mw_data = scrape_marketwatch_consensus(ticker)
+        if mw_data['data_quality'] in ['high', 'medium']:
+            data_sources['marketwatch'] = mw_data
+            print(f"    MarketWatch: {mw_data['data_quality']} quality")
+        else:
+            print(f"     MarketWatch: {mw_data['data_quality']} quality")
+    except Exception as e:
+        print(f"   ❌ MarketWatch failed: {e}")
+    
+    # Source 3: Yahoo web scraping (backup)
+    try:
+        yahoo_web_data = scrape_yahoo_web_targets(ticker)
+        if yahoo_web_data['data_quality'] in ['high', 'medium']:
+            data_sources['yahoo_web'] = yahoo_web_data
+            print(f"    Yahoo Web: {yahoo_web_data['data_quality']} quality")
+        else:
+            print(f"     Yahoo Web: {yahoo_web_data['data_quality']} quality")
+    except Exception as e:
+        print(f"   ❌ Yahoo Web failed: {e}")
+    
+    return aggregate_analyst_data(ticker, data_sources)
+
+
+def aggregate_analyst_data(ticker, data_sources):
+    """Aggregate and validate analyst data from multiple sources"""
+    
+    if not data_sources:
+        return {
+            'ticker': ticker,
+            'consensus_target': None,
+            'target_range': {'high': None, 'low': None},
+            'analyst_count': None,
+            'recommendation_score': None,
+            'confidence_level': 0,
+            'data_sources': [],
+            'aggregated_at': datetime.now().isoformat(),
+            'quality': 'failed'
+        }
+    
+    # Collect all target prices
+    target_prices = []
+    analyst_counts = []
+    recommendation_scores = []
+    
+    # Extract data from each source
+    for source_name, source_data in data_sources.items():
+        if source_name == 'yahoo_api':
+            analyst_data = source_data['analyst_data']
+            if analyst_data.get('target_mean'):
+                target_prices.append(analyst_data['target_mean'])
+            if analyst_data.get('target_high'):
+                target_prices.append(analyst_data['target_high'])
+            if analyst_data.get('target_low'):
+                target_prices.append(analyst_data['target_low'])
+            if analyst_data.get('analyst_count'):
+                analyst_counts.append(analyst_data['analyst_count'])
+            if analyst_data.get('recommendation_mean'):
+                recommendation_scores.append(analyst_data['recommendation_mean'])
+                
+        elif source_name == 'marketwatch':
+            if source_data.get('consensus_target'):
+                target_prices.append(source_data['consensus_target'])
+            if source_data.get('analyst_count'):
+                analyst_counts.append(source_data['analyst_count'])
+                
+        elif source_name == 'yahoo_web':
+            targets = source_data.get('targets', {})
+            for target_type, value in targets.items():
+                if value:
+                    target_prices.append(value)
+    
+    # Remove outliers (beyond 3 standard deviations)
+    if len(target_prices) > 2:
+        target_prices = remove_outliers(target_prices)
+    
+    # Calculate aggregated metrics
+    consensus_target = None
+    target_high = None
+    target_low = None
+    
+    if target_prices:
+        target_prices = [p for p in target_prices if p and p > 0]
+        if target_prices:
+            consensus_target = round(sum(target_prices) / len(target_prices), 2)
+            target_high = round(max(target_prices), 2)
+            target_low = round(min(target_prices), 2)
+    
+    # Aggregate analyst count
+    total_analysts = max(analyst_counts) if analyst_counts else None
+    
+    # Aggregate recommendation score (1=Strong Buy, 5=Strong Sell)
+    avg_recommendation = None
+    if recommendation_scores:
+        avg_recommendation = round(sum(recommendation_scores) / len(recommendation_scores), 2)
+    
+    # Calculate confidence level (0-10)
+    confidence = calculate_confidence_level(data_sources, target_prices, analyst_counts)
+    
+    # Determine overall quality
+    quality = 'high' if confidence >= 7 else 'medium' if confidence >= 4 else 'low'
+    
+    return {
+        'ticker': ticker,
+        'consensus_target': consensus_target,
+        'target_range': {'high': target_high, 'low': target_low},
+        'analyst_count': total_analysts,
+        'recommendation_score': avg_recommendation,
+        'confidence_level': confidence,
+        'data_sources': list(data_sources.keys()),
+        'raw_targets': target_prices,
+        'aggregated_at': datetime.now().isoformat(),
+        'quality': quality
+    }

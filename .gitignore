@@ -81,3 +81,7 @@ backups/
 # Local configuration overrides
 local_config.py
 config_override.yaml
+
+# Documentaion
+.docs
+CLAUDE.md
