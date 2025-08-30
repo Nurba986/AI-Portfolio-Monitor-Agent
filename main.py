@@ -14,6 +14,12 @@ Architecture:
 
 import functions_framework
 import json
+import os
+try:
+    import yaml
+except ImportError:
+    print("Warning: PyYAML not installed, using manual .env parsing")
+    yaml = None
 from datetime import datetime
 
 # Import modular services
@@ -76,19 +82,28 @@ def portfolio_monitor(request):
         # Check for trading opportunities with confidence scoring
         alerts = check_enhanced_alerts(current_prices, dynamic_targets)
         
-        # Send enhanced email with AI insights
-        if alerts:
+        # Send enhanced email with AI insights (ALWAYS send daily summary)
+        email_sent = False
+        email_error = None
+        
+        try:
+            # Always send daily summary - even if no alerts
             send_enhanced_email(alerts, current_prices, dynamic_targets)
-            print(f"📧 Daily summary sent with {len(alerts)} trading opportunities")
-        else:
-            print("✅ No alerts - all stocks within normal ranges")
+            email_sent = True
+            if alerts:
+                print(f"📧 Daily summary sent successfully with {len(alerts)} trading opportunities")
+            else:
+                print("📧 Daily status summary sent successfully - no trading opportunities")
+        except Exception as e:
+            email_error = str(e)
+            print(f"❌ Failed to send daily summary email: {email_error}")
         
         # Calculate portfolio metrics
         total_value = calculate_portfolio_value(current_prices)
         high_confidence_targets = sum(1 for target in dynamic_targets.values() 
                                      if target['confidence_score'] >= 7)
         
-        # Return success response
+        # Return success response with email status
         return {
             "status": "success",
             "timestamp": datetime.now().isoformat(),
@@ -97,12 +112,14 @@ def portfolio_monitor(request):
             "portfolio_value": total_value,
             "dynamic_targets_loaded": True,
             "high_confidence_targets": high_confidence_targets,
+            "email_sent": email_sent,
+            "email_error": email_error,
             "targets_summary": {ticker: {
                 'buy_target': target['buy_target'],
                 'sell_target': target['sell_target'],
                 'confidence': target['confidence_score']
             } for ticker, target in dynamic_targets.items()},
-            "message": f"Checked {len(current_prices)} stocks with dynamic targets, found {len(alerts)} alerts"
+            "message": f"Checked {len(current_prices)} stocks with dynamic targets, found {len(alerts)} alerts. Email status: {'sent' if email_sent else 'failed'}"
         }
         
     except Exception as e:
@@ -166,20 +183,31 @@ def monthly_target_update(request):
                 continue
         
         # Send comprehensive update email
+        email_sent = False
+        email_error = None
+        
         if updated_targets:
-            send_target_update_email(updated_targets, total_cost)
+            try:
+                send_target_update_email(updated_targets, total_cost)
+                email_sent = True
+                print(f"📧 Target update email sent successfully")
+            except Exception as e:
+                email_error = str(e)
+                print(f"❌ Failed to send target update email: {email_error}")
         
         return {
             "status": "success",
             "timestamp": datetime.now().isoformat(),
             "updated_stocks": len(updated_targets),
             "estimated_cost": f"${total_cost:.2f}",
+            "email_sent": email_sent,
+            "email_error": email_error,
             "targets": {ticker: {
                 'buy_target': data['buy_target'],
                 'sell_target': data['sell_target'],
                 'confidence': data['confidence_score']
             } for ticker, data in updated_targets.items()},
-            "message": f"Updated targets for {len(updated_targets)} stocks"
+            "message": f"Updated targets for {len(updated_targets)} stocks. Email status: {'sent' if email_sent else 'failed'}"
         }
         
     except Exception as e:
@@ -193,13 +221,92 @@ def monthly_target_update(request):
         }
 
 
+def load_local_env():
+    """Load environment variables from .env.yaml for local testing"""
+    try:
+        env_file = os.path.join(os.path.dirname(__file__), '.env.yaml')
+        if os.path.exists(env_file):
+            if yaml:
+                with open(env_file, 'r') as f:
+                    env_vars = yaml.safe_load(f)
+                    for key, value in env_vars.items():
+                        os.environ[key] = str(value)
+                    print(f"✅ Loaded {len(env_vars)} environment variables from .env.yaml")
+            else:
+                # Manual parsing if PyYAML not available
+                with open(env_file, 'r') as f:
+                    lines = f.readlines()
+                    env_count = 0
+                    for line in lines:
+                        if ':' in line and not line.strip().startswith('#'):
+                            key, value = line.strip().split(':', 1)
+                            key = key.strip()
+                            value = value.strip().strip('"').strip("'")
+                            os.environ[key] = value
+                            env_count += 1
+                    print(f"✅ Loaded {env_count} environment variables from .env.yaml (manual parsing)")
+        else:
+            print("⚠️ No .env.yaml file found for local testing")
+    except Exception as e:
+        print(f"❌ Failed to load .env.yaml: {e}")
+
+
+def test_email():
+    """Simple email test function"""
+    from services.email_service import _send_email
+    
+    print("🧪 Testing email functionality...")
+    
+    # Test basic email sending
+    subject = "Portfolio Agent - Email Test"
+    html_body = """
+    <html>
+    <body style="font-family: Arial, sans-serif; margin: 20px;">
+        <h2 style="color: #1a73e8;">Email Test Successful!</h2>
+        <p>This is a test email from your Portfolio Agent.</p>
+        <p><strong>Time:</strong> """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</p>
+        <p>If you receive this email, your email configuration is working correctly.</p>
+    </body>
+    </html>
+    """
+    
+    success, result = _send_email(subject, html_body)
+    
+    if success:
+        print(f"✅ Test email sent successfully to {result}")
+        return True
+    else:
+        print(f"❌ Test email failed: {result}")
+        return False
+
+
 # For local testing
 if __name__ == "__main__":
     print("🧪 Testing portfolio monitor locally...")
     
-    class MockRequest:
-        pass
+    # Load environment variables for local testing
+    load_local_env()
     
-    result = portfolio_monitor(MockRequest())
-    print(json.dumps(result, indent=2, default=str))
+    # Enable market hours bypass for testing
+    os.environ['BYPASS_MARKET_HOURS'] = 'true'
+    
+    print("\n" + "="*50)
+    print("RUNNING EMAIL TEST")
+    print("="*50)
+    
+    # Test email first
+    email_works = test_email()
+    
+    print("\n" + "="*50)
+    print("RUNNING PORTFOLIO MONITOR")
+    print("="*50)
+    
+    if email_works:
+        class MockRequest:
+            pass
+        
+        result = portfolio_monitor(MockRequest())
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print("❌ Skipping portfolio monitor test due to email failure")
 

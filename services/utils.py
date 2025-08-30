@@ -63,11 +63,24 @@ def get_http_session():
     return session
 
 
-def is_market_open():
+def is_market_open(bypass_for_testing=False):
     """
     Check if the US stock market is currently open
+    Args:
+        bypass_for_testing (bool): If True, bypasses market hours check for testing/debugging
     Returns: (is_open: bool, reason: str)
     """
+    # Allow bypass for testing and debugging
+    if bypass_for_testing:
+        print("TESTING MODE: Market hours check bypassed")
+        return True, "Testing mode - market hours bypassed"
+    
+    # Check environment variable for bypass (useful for GCP debugging)
+    import os
+    if os.environ.get('BYPASS_MARKET_HOURS', '').lower() in ('true', '1', 'yes'):
+        print("BYPASS_MARKET_HOURS enabled - skipping market hours validation")
+        return True, "Market hours bypassed via BYPASS_MARKET_HOURS environment variable"
+    
     # Get current time in Eastern Time (market timezone)
     et_tz = pytz.timezone('America/New_York')
     now_et = datetime.now(et_tz)

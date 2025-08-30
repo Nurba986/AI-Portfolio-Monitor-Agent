@@ -112,7 +112,7 @@
   - MarketWatch (web scraping for analyst data)
 - **Performance**: 
   - Daily execution: <60 seconds total runtime
-  - Monthly updates: ~10 minutes for 18 stocks
+  - Monthly updates: ~10 minutes for 12 stocks
   - Email delivery: <5 seconds
   - API cost optimization: ~$9/month for Claude API
 - **Security**:

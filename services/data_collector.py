@@ -4,6 +4,7 @@ Handles stock price fetching, web scraping, and analyst data aggregation
 """
 
 import yfinance as yf
+import pandas as pd
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime
@@ -81,13 +82,16 @@ def get_stock_prices_fast(portfolio_tickers):
     """Fast batch stock price fetching with threading"""
     try:
         # Try bulk download first (fastest method)
-        print(" Attempting bulk price fetch...")
+        print(f"📊 Starting price fetch for {len(portfolio_tickers)} stocks: {list(portfolio_tickers)}")
+        print("📊 Attempting bulk price fetch...")
         tickers_list = list(portfolio_tickers)
         
         # Use yfinance bulk download for speed
         df = yf.download(tickers=tickers_list, period="1d", threads=True, progress=False)
         
+        print(f"📊 DataFrame empty: {df.empty}")
         if not df.empty:
+            print(f"📊 DataFrame shape: {df.shape}, columns: {list(df.columns)}")
             # Handle both single and multi-ticker cases
             if len(tickers_list) == 1:
                 # Single ticker case
@@ -109,38 +113,59 @@ def get_stock_prices_fast(portfolio_tickers):
                 
                 if prices:
                     return prices
+        else:
+            print("❌ DataFrame is empty from yfinance")
     except Exception as e:
-        print(f"     Bulk fetch failed: {e}, falling back to individual fetch")
+        print(f"❌ Bulk fetch failed: {e}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()[:300]}...")
     
     # Fallback: threaded individual fetches (limited concurrency to avoid rate limits)
-    print(" Using threaded fallback fetch...")
+    print("📊 Using threaded fallback fetch...")
     prices = {}
     
     def fetch_single_price(ticker):
+        print(f"📊 Fetching {ticker} individually...")
         try:
+            # Add delay to avoid rate limiting
+            import time
+            import random
+            time.sleep(random.uniform(0.5, 1.5))  # Random delay 0.5-1.5 seconds
+            
             stock = yf.Ticker(ticker)
             # Try fast_info first, then regular info
             try:
                 fast_info = stock.fast_info
                 price = fast_info.get("last_price")
                 if price and price > 0:
+                    print(f"✅ {ticker}: fast_info price ${price:.2f}")
                     return ticker, round(float(price), 2)
-            except:
-                pass
+            except Exception as e:
+                print(f"📊 {ticker}: fast_info failed ({e}), trying info...")
                 
+            # Add another small delay before trying info
+            time.sleep(0.5)
+            
             # Fallback to regular info
             info = stock.info
             price = info.get('currentPrice') or info.get('regularMarketPrice')
             if price and price > 0:
+                print(f"✅ {ticker}: info price ${price:.2f}")
                 return ticker, round(float(price), 2)
+            else:
+                print(f"❌ {ticker}: no valid price in info")
                 
         except Exception as e:
-            print(f"   ❌ Error fetching {ticker}: {e}")
+            print(f"❌ Error fetching {ticker}: {e}")
+            # If rate limited, suggest retrying
+            if "429" in str(e):
+                print(f"⚠️ {ticker}: Rate limited - will try again later")
         
         return ticker, None
     
-    # Use ThreadPoolExecutor with limited concurrency to avoid rate limits
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    # Use ThreadPoolExecutor with very limited concurrency to avoid rate limits
+    with ThreadPoolExecutor(max_workers=2) as executor:
         future_to_ticker = {executor.submit(fetch_single_price, ticker): ticker for ticker in portfolio_tickers}
         
         for future in as_completed(future_to_ticker):
@@ -151,6 +176,11 @@ def get_stock_prices_fast(portfolio_tickers):
             else:
                 print(f"     Could not get price for {ticker}")
     
+    print(f"📊 FINAL RESULT: {len(prices)}/{len(portfolio_tickers)} stocks fetched successfully")
+    print(f"📊 Successful: {list(prices.keys())}")
+    if len(prices) < len(portfolio_tickers):
+        failed = [t for t in portfolio_tickers if t not in prices]
+        print(f"📊 Failed: {failed}")
     return prices
 
 

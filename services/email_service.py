@@ -11,37 +11,80 @@ from datetime import datetime, timezone
 
 
 def _setup_smtp_connection():
-    """Setup and return configured SMTP connection"""
-    sender_email = os.environ['GMAIL_USER']
-    sender_password = os.environ['GMAIL_PASSWORD']
+    """Setup and return configured SMTP connection with proper error handling"""
+    # Validate environment variables
+    sender_email = os.environ.get('GMAIL_USER')
+    sender_password = os.environ.get('GMAIL_PASSWORD')
     
-    server = smtplib.SMTP('smtp.gmail.com', 587)
-    server.starttls()
-    server.login(sender_email, sender_password)
+    if not sender_email:
+        raise ValueError("GMAIL_USER environment variable is not set")
+    if not sender_password:
+        raise ValueError("GMAIL_PASSWORD environment variable is not set")
     
-    return server, sender_email
-
-
-def _send_email(subject, html_body):
-    """Common email sending functionality"""
+    print(f"Setting up SMTP connection for {sender_email}")
+    
     try:
-        server, sender_email = _setup_smtp_connection()
-        recipient = os.environ.get('ALERT_RECIPIENT', sender_email)
+        # Configure SMTP with timeout
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=30)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        print("SMTP authentication successful")
         
-        # Create and send email
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = sender_email
-        msg['To'] = recipient
-        msg.attach(MIMEText(html_body, 'html'))
-        
-        server.send_message(msg)
-        server.quit()
-        
-        return True, recipient
-        
+        return server, sender_email
+    except smtplib.SMTPAuthenticationError as e:
+        raise ValueError(f"Gmail authentication failed. Check GMAIL_USER and GMAIL_PASSWORD: {e}")
+    except smtplib.SMTPConnectError as e:
+        raise ValueError(f"Failed to connect to Gmail SMTP server: {e}")
     except Exception as e:
-        return False, str(e)
+        raise ValueError(f"SMTP setup failed: {e}")
+
+
+def _send_email(subject, html_body, max_retries=3):
+    """Common email sending functionality with retry logic and better error handling"""
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"Email attempt {attempt + 1}/{max_retries}: '{subject}'")
+            
+            server, sender_email = _setup_smtp_connection()
+            recipient = os.environ.get('ALERT_RECIPIENT', sender_email)
+            
+            print(f"Sending email to {recipient}")
+            
+            # Create and send email
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = sender_email
+            msg['To'] = recipient
+            msg.attach(MIMEText(html_body, 'html'))
+            
+            # Send with explicit error checking
+            refused = server.send_message(msg)
+            if refused:
+                raise smtplib.SMTPRecipientsRefused(f"Recipients refused: {refused}")
+            
+            server.quit()
+            print(f"Email sent successfully to {recipient}")
+            
+            return True, recipient
+            
+        except (smtplib.SMTPException, ValueError) as e:
+            last_error = e
+            print(f"Email attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in 2 seconds...")
+                import time
+                time.sleep(2)
+            continue
+        except Exception as e:
+            last_error = e
+            print(f"Unexpected error during email attempt {attempt + 1}: {e}")
+            break
+    
+    error_msg = f"Failed to send email after {max_retries} attempts. Last error: {last_error}"
+    print(f"ERROR: {error_msg}")
+    return False, error_msg
 
 
 def send_enhanced_email(alerts, current_prices, dynamic_targets):
@@ -147,15 +190,16 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
         
         # Add AI insights summary
         high_confidence = sum(1 for target in dynamic_targets.values() 
-                             if target['confidence_score'] >= 7)
+                             if target.get('confidence_score', 3) >= 7)
         # Count recent updates (with proper timezone handling)
         now_utc = datetime.now(timezone.utc)
         recent_updates = 0
         for target in dynamic_targets.values():
-            if target['updated_at']:
+            updated_at_field = target.get('updated_at')
+            if updated_at_field:
                 try:
                     # Parse ISO format datetime with timezone awareness
-                    updated_at_str = target['updated_at'].replace('Z', '+00:00')
+                    updated_at_str = updated_at_field.replace('Z', '+00:00')
                     updated_at = datetime.fromisoformat(updated_at_str)
                     if updated_at.tzinfo is None:
                         updated_at = updated_at.replace(tzinfo=timezone.utc)
@@ -197,7 +241,10 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
             print(f"=> Failed to send enhanced email: {result}")
             
     except Exception as e:
-        print(f"=> Failed to send enhanced email: {e}")
+        error_msg = f"Enhanced email function error: {e}"
+        print(f"=> ERROR: {error_msg}")
+        # Re-raise to allow calling function to handle
+        raise RuntimeError(error_msg) from e
 
 
 def send_target_update_email(updated_targets, estimated_cost):
@@ -292,7 +339,10 @@ def send_target_update_email(updated_targets, estimated_cost):
             print(f"=> Failed to send target update email: {result}")
             
     except Exception as e:
-        print(f"=> Failed to send target update email: {e}")
+        error_msg = f"Target update email function error: {e}"
+        print(f"=> ERROR: {error_msg}")
+        # Re-raise to allow calling function to handle
+        raise RuntimeError(error_msg) from e
 
 
 def send_email(alerts, current_prices, portfolio_config):
@@ -380,4 +430,7 @@ def send_email(alerts, current_prices, portfolio_config):
             print(f"=> Failed to send email: {result}")
             
     except Exception as e:
-        print(f"=> Failed to send email: {e}")
+        error_msg = f"Legacy email function error: {e}"
+        print(f"=> ERROR: {error_msg}")
+        # Re-raise to allow calling function to handle
+        raise RuntimeError(error_msg) from e
