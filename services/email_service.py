@@ -103,7 +103,7 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
         <html>
         <body style="font-family: Arial, sans-serif; margin: 20px;">
             <h2 style="color: #1a73e8;">=> Daily Portfolio Summary</h2>
-            <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d at %H:%M:%S EST')}</p>
+            <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d at %H:%M:%S ET')}</p>
             <p><strong>Signal Summary:</strong> {buy_alerts} Buy, {sell_alerts} Sell, {watch_alerts} Watch Opportunities</p>
             <p><strong>Portfolio:</strong> {len(current_prices)} stocks monitored with AI-powered targets (daily at 3 PM ET)</p>
             
@@ -257,7 +257,7 @@ def send_target_update_email(updated_targets, estimated_cost):
         <html>
         <body style="font-family: Arial, sans-serif; margin: 20px;">
             <h2 style="color: #1a73e8;">=> Monthly Target Update</h2>
-            <p><strong>Update Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S EST')}</p>
+            <p><strong>Update Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</p>
             <p><strong>Stocks Analyzed:</strong> {len(updated_targets)}</p>
             <p><strong>Estimated Cost:</strong> ${estimated_cost:.2f}</p>
             
@@ -356,7 +356,7 @@ def send_email(alerts, current_prices, portfolio_config):
         <html>
         <body style="font-family: Arial, sans-serif; margin: 20px;">
             <h2 style="color: #1a73e8;">=> Portfolio Alert</h2>
-            <p><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S EST')}</p>
+            <p><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</p>
             <p><strong>Monitoring:</strong> {len(current_prices)} stocks</p>
             
             <h3 style="color: #ea4335;">=> Alerts ({len(alerts)})</h3>

@@ -103,7 +103,7 @@ def analyze_with_claude(ticker, financials, analyst_data):
         # Get Claude API key from environment
         claude_api_key = os.environ.get('CLAUDE_API_KEY')
         if not claude_api_key:
-            print(f"  L No Claude API key found for {ticker}")
+            print(f"  ⚠️ No Claude API key found for {ticker}")
             return None
             
         # Initialize Claude client
@@ -132,7 +132,7 @@ def analyze_with_claude(ticker, financials, analyst_data):
         return parse_claude_response(ticker, response_text, analyst_data)
         
     except Exception as e:
-        print(f"  L Claude analysis failed for {ticker}: {e}")
+        print(f"  ⚠️ Claude analysis failed for {ticker}: {e}")
         return None
 
 

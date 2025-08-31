@@ -4,7 +4,6 @@ Handles stock price fetching, web scraping, and analyst data aggregation
 """
 
 import yfinance as yf
-import pandas as pd
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime

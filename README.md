@@ -103,7 +103,7 @@
 **Technical**
 
 - **Architecture**: Serverless microservices on Google Cloud Platform
-- **Runtime**: Python 3.13 with modular service architecture
+- **Runtime**: Python 3.12 with modular service architecture (GCP compatible)
 - **Integrations**: 
   - Yahoo Finance API (stock prices, financial data)
   - Anthropic Claude Haiku API (AI analysis)
@@ -121,6 +121,19 @@
   - HTTPS-only external communications
   - Input validation for all external API data
   - No sensitive data in logs or responses
+
+**Environment Variables**
+
+Required for system operation:
+- `GMAIL_USER`: Gmail address for sending alerts (example: your-email@gmail.com)
+- `GMAIL_PASSWORD`: Gmail App Password (16-character code, not account password)
+- `CLAUDE_API_KEY`: Anthropic Claude API key for AI analysis
+- `GOOGLE_CLOUD_PROJECT`: GCP project ID (for Firestore access)
+
+Optional configuration:
+- `ALERT_RECIPIENT`: Email recipient for alerts (defaults to GMAIL_USER if not set)
+- `BYPASS_MARKET_HOURS`: Set to 'true' for testing outside market hours
+- `GOOGLE_APPLICATION_CREDENTIALS`: Path to GCP service account JSON (local dev only)
 
 **Success Metrics**
 

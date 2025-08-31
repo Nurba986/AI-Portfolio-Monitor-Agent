@@ -42,10 +42,10 @@ def load_targets_from_firestore(portfolio_config):
                         'updated_at': None,
                         'analyst_consensus': None
                     }
-                    print(f"  � Using fallback targets for {ticker}")
+                    print(f"  ⚠️ Using fallback targets for {ticker}")
                     
             except Exception as e:
-                print(f"  L Error loading {ticker} from Firestore: {e}")
+                print(f"  ⚠️ Error loading {ticker} from Firestore: {e}")
                 # Use hardcoded fallback
                 portfolio_targets[ticker] = {
                     'buy_target': portfolio_config[ticker]['buy_target'],
@@ -57,12 +57,12 @@ def load_targets_from_firestore(portfolio_config):
                     'analyst_consensus': None
                 }
         
-        print(f" Loaded targets for {len(portfolio_targets)} stocks")
+        print(f"✅ Loaded targets for {len(portfolio_targets)} stocks")
         return portfolio_targets
         
     except Exception as e:
-        print(f"L Failed to connect to Firestore: {e}")
-        print("� Using hardcoded portfolio targets as fallback")
+        print(f"⚠️ Failed to connect to Firestore: {e}")
+        print("📊 Using hardcoded portfolio targets as fallback")
         
         # Return hardcoded targets as fallback
         fallback_targets = {}
@@ -98,11 +98,11 @@ def check_enhanced_alerts(current_prices, dynamic_targets):
         catalyst = target_config['key_catalyst']
         
         # Confidence indicator
-        confidence_icon = "=%" if confidence >= 8 else "P" if confidence >= 6 else "=�"
+        confidence_icon = "⭐⭐⭐" if confidence >= 8 else "⭐⭐" if confidence >= 6 else "⭐"
         
         # BUY SIGNAL: Price at or below buy target
         if price <= buy_target:
-            alert = f"=� BUY SIGNAL: {ticker} hit ${price:.2f} (target d${buy_target:.2f}) {confidence_icon} Confidence: {confidence}/10. Catalyst: {catalyst[:50]}..."
+            alert = f"🟢 BUY SIGNAL: {ticker} hit ${price:.2f} (target <=${buy_target:.2f}) {confidence_icon} Confidence: {confidence}/10. Catalyst: {catalyst[:50]}..."
             alerts.append({
                 'type': 'BUY',
                 'ticker': ticker,
@@ -112,12 +112,12 @@ def check_enhanced_alerts(current_prices, dynamic_targets):
                 'catalyst': catalyst,
                 'message': alert
             })
-            print(f"  =� BUY alert: {ticker} (confidence {confidence}/10)")
+            print(f"  🟢 BUY alert: {ticker} (confidence {confidence}/10)")
         
         # SELL SIGNAL: Price at or above sell target
         elif price >= sell_target:
             profit_pct = ((price - buy_target) / buy_target) * 100
-            alert = f"=4 SELL SIGNAL: {ticker} hit ${price:.2f} (target e${sell_target:.2f}) {confidence_icon} Est. gain: {profit_pct:.1f}%. Confidence: {confidence}/10."
+            alert = f"🔴 SELL SIGNAL: {ticker} hit ${price:.2f} (target >=${sell_target:.2f}) {confidence_icon} Est. gain: {profit_pct:.1f}%. Confidence: {confidence}/10."
             alerts.append({
                 'type': 'SELL',
                 'ticker': ticker,
@@ -127,14 +127,14 @@ def check_enhanced_alerts(current_prices, dynamic_targets):
                 'profit_pct': profit_pct,
                 'message': alert
             })
-            print(f"  =4 SELL alert: {ticker} (confidence {confidence}/10)")
+            print(f"  🔴 SELL alert: {ticker} (confidence {confidence}/10)")
         
         # WARNING: Close to buy target (within 5%)
         else:
             buy_distance = abs(price - buy_target) / buy_target
             if buy_distance <= 0.05 and price > buy_target:
                 distance_pct = ((price - buy_target) / buy_target) * 100
-                alert = f"=� WATCH: {ticker} at ${price:.2f}, only {distance_pct:.1f}% above buy target ${buy_target:.2f}. {confidence_icon} Confidence: {confidence}/10"
+                alert = f"🟡 WATCH: {ticker} at ${price:.2f}, only {distance_pct:.1f}% above buy target ${buy_target:.2f}. {confidence_icon} Confidence: {confidence}/10"
                 alerts.append({
                     'type': 'WATCH',
                     'ticker': ticker,
@@ -144,7 +144,7 @@ def check_enhanced_alerts(current_prices, dynamic_targets):
                     'distance_pct': distance_pct,
                     'message': alert
                 })
-                print(f"  =� WATCH alert: {ticker} (confidence {confidence}/10)")
+                print(f"  🟡 WATCH alert: {ticker} (confidence {confidence}/10)")
     
     return alerts
 
@@ -163,25 +163,25 @@ def check_alerts(current_prices, portfolio_config):
         
         # BUY SIGNAL: Price at or below buy target
         if price <= buy_target:
-            alert = f"=� BUY SIGNAL: {ticker} hit ${price:.2f} (target d${buy_target:.2f}). Time to buy!"
+            alert = f"🟢 BUY SIGNAL: {ticker} hit ${price:.2f} (target <=${buy_target:.2f}). Time to buy!"
             alerts.append(alert)
-            print(f"  =� BUY alert: {ticker}")
+            print(f"  🟢 BUY alert: {ticker}")
         
         # SELL SIGNAL: Price at or above sell target
         elif price >= sell_target:
             profit_pct = ((price - buy_target) / buy_target) * 100
-            alert = f"=4 SELL SIGNAL: {ticker} hit ${price:.2f} (target e${sell_target:.2f}). Consider taking profits! Est. gain: {profit_pct:.1f}%"
+            alert = f"🔴 SELL SIGNAL: {ticker} hit ${price:.2f} (target >=${sell_target:.2f}). Consider taking profits! Est. gain: {profit_pct:.1f}%"
             alerts.append(alert)
-            print(f"  =4 SELL alert: {ticker}")
+            print(f"  🔴 SELL alert: {ticker}")
         
         # WARNING: Close to buy target (within 3%)
         else:
             buy_distance = abs(price - buy_target) / buy_target
             if buy_distance <= 0.03 and price > buy_target:
                 distance_pct = ((price - buy_target) / buy_target) * 100
-                alert = f"=� WATCH: {ticker} at ${price:.2f}, only {distance_pct:.1f}% above buy target ${buy_target:.2f}"
+                alert = f"🟡 WATCH: {ticker} at ${price:.2f}, only {distance_pct:.1f}% above buy target ${buy_target:.2f}"
                 alerts.append(alert)
-                print(f"  =� WATCH alert: {ticker}")
+                print(f"  🟡 WATCH alert: {ticker}")
     
     return alerts
 
@@ -214,5 +214,5 @@ def save_targets_to_firestore(ticker, claude_analysis, analyst_data, financials)
         return target_doc
         
     except Exception as e:
-        print(f"  L Failed to save {ticker} to Firestore: {e}")
+        print(f"  ⚠️ Failed to save {ticker} to Firestore: {e}")
         return None
