@@ -6,13 +6,50 @@ Handles stock price fetching, web scraping, and analyst data aggregation
 import yfinance as yf
 from bs4 import BeautifulSoup
 import re
+import os
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from .utils import get_http_session, remove_outliers, calculate_confidence_level
+from .utils import (get_http_session, remove_outliers, calculate_confidence_level, 
+                    get_cached_data, cache_data)
+
+
+def _is_marketwatch_enabled():
+    """Check if MarketWatch scraping is enabled via environment variable"""
+    return os.environ.get('ENABLE_MW_SCRAPE', 'true').lower() in ('true', '1', 'yes')
+
+
+def _is_yahoo_web_enabled():
+    """Check if Yahoo web scraping is enabled via environment variable"""
+    return os.environ.get('ENABLE_YF_WEB_SCRAPE', 'true').lower() in ('true', '1', 'yes')
+
+
+def _assess_data_quality(data_sources, target_prices):
+    """Assess if data quality is sufficient to skip additional sources"""
+    if not data_sources:
+        return False
+    
+    # Check for high-quality primary source
+    yahoo_api = data_sources.get('yahoo_api')
+    if yahoo_api and yahoo_api.get('data_quality') == 'high':
+        analyst_data = yahoo_api.get('analyst_data', {})
+        if (analyst_data.get('target_mean') and 
+            analyst_data.get('analyst_count', 0) >= 5):
+            return True
+    
+    # Check if we have sufficient target price data
+    if len(target_prices) >= 3:
+        return True
+    
+    return False
 
 
 def get_enhanced_yahoo_data(ticker):
     """Get comprehensive Yahoo Finance data including analyst targets and financials"""
+    # Check cache first
+    cached_data = get_cached_data(ticker, 'yahoo_api')
+    if cached_data:
+        return cached_data
+    
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
@@ -60,12 +97,16 @@ def get_enhanced_yahoo_data(ticker):
             'dividend_yield': info.get('dividendYield')
         }
         
-        return {
+        result = {
             'ticker': ticker,
             'analyst_data': analyst_data,
             'financials': financials,
             'data_quality': 'high' if current_price and analyst_data.get('target_mean') else 'medium'
         }
+        
+        # Cache the result
+        cache_data(ticker, 'yahoo_api', result)
+        return result
         
     except Exception as e:
         print(f"   ❌ Error fetching enhanced data for {ticker}: {e}")
@@ -108,7 +149,7 @@ def get_stock_prices_fast(portfolio_tickers):
                         price = last_prices[ticker]
                         if price and price > 0:
                             prices[ticker] = round(float(price), 2)
-                            print(f"    {ticker}: ${price:.2f}")
+                            print(f"    {ticker}: ${price:.2f}")
                 
                 if prices:
                     return prices
@@ -171,7 +212,7 @@ def get_stock_prices_fast(portfolio_tickers):
             ticker, price = future.result()
             if price:
                 prices[ticker] = price
-                print(f"    {ticker}: ${price:.2f}")
+                print(f"    {ticker}: ${price:.2f}")
             else:
                 print(f"     Could not get price for {ticker}")
     
@@ -185,6 +226,11 @@ def get_stock_prices_fast(portfolio_tickers):
 
 def scrape_marketwatch_consensus(ticker):
     """Scrape MarketWatch for analyst consensus data"""
+    # Check cache first
+    cached_data = get_cached_data(ticker, 'marketwatch')
+    if cached_data:
+        return cached_data
+    
     try:
         url = f"https://www.marketwatch.com/investing/stock/{ticker}/analystestimates"
         
@@ -249,7 +295,7 @@ def scrape_marketwatch_consensus(ticker):
                     except ValueError:
                         pass
         
-        return {
+        result = {
             'source': 'marketwatch',
             'ticker': ticker,
             'consensus_target': consensus_target,
@@ -258,6 +304,10 @@ def scrape_marketwatch_consensus(ticker):
             'data_quality': 'high' if consensus_target and analyst_count else 'low',
             'scraped_at': datetime.now().isoformat()
         }
+        
+        # Cache the result
+        cache_data(ticker, 'marketwatch', result)
+        return result
         
     except Exception as e:
         print(f"     MarketWatch scraping failed for {ticker}: {e}")
@@ -275,6 +325,11 @@ def scrape_marketwatch_consensus(ticker):
 
 def scrape_yahoo_web_targets(ticker):
     """Scrape Yahoo Finance web page for additional analyst data"""
+    # Check cache first
+    cached_data = get_cached_data(ticker, 'yahoo_web')
+    if cached_data:
+        return cached_data
+    
     try:
         url = f"https://finance.yahoo.com/quote/{ticker}/analysis"
         
@@ -305,13 +360,17 @@ def scrape_yahoo_web_targets(ticker):
             except ValueError:
                 continue
         
-        return {
+        result = {
             'source': 'yahoo_web',
             'ticker': ticker,
             'targets': targets,
             'data_quality': 'medium' if any(targets.values()) else 'low',
             'scraped_at': datetime.now().isoformat()
         }
+        
+        # Cache the result
+        cache_data(ticker, 'yahoo_web', result)
+        return result
         
     except Exception as e:
         print(f"     Yahoo web scraping failed for {ticker}: {e}")
@@ -326,43 +385,70 @@ def scrape_yahoo_web_targets(ticker):
 
 
 def collect_analyst_data(ticker):
-    """Collect analyst data from multiple free sources"""
+    """Collect analyst data with smart fallback logic and feature flags"""
     print(f"=> Collecting analyst data for {ticker}...")
     
     data_sources = {}
+    target_prices = []
     
-    # Source 1: Enhanced Yahoo Finance API
+    # Source 1: Enhanced Yahoo Finance API (ALWAYS enabled - primary source)
     try:
         yahoo_data = get_enhanced_yahoo_data(ticker)
         if yahoo_data['data_quality'] in ['high', 'medium']:
             data_sources['yahoo_api'] = yahoo_data
-            print(f"    Yahoo API: {yahoo_data['data_quality']} quality")
+            print(f"    Yahoo API: {yahoo_data['data_quality']} quality")
+            
+            # Collect target prices for quality assessment
+            analyst_data = yahoo_data.get('analyst_data', {})
+            for key in ['target_mean', 'target_high', 'target_low']:
+                if analyst_data.get(key):
+                    target_prices.append(analyst_data[key])
         else:
             print(f"     Yahoo API: {yahoo_data['data_quality']} quality")
     except Exception as e:
         print(f"   ❌ Yahoo API failed: {e}")
     
-    # Source 2: MarketWatch scraping
-    try:
-        mw_data = scrape_marketwatch_consensus(ticker)
-        if mw_data['data_quality'] in ['high', 'medium']:
-            data_sources['marketwatch'] = mw_data
-            print(f"    MarketWatch: {mw_data['data_quality']} quality")
-        else:
-            print(f"     MarketWatch: {mw_data['data_quality']} quality")
-    except Exception as e:
-        print(f"   ❌ MarketWatch failed: {e}")
+    # Check if we have sufficient data quality to skip additional sources
+    if _assess_data_quality(data_sources, target_prices):
+        print(f"    Sufficient data quality from primary sources - skipping additional scraping")
+        return aggregate_analyst_data(ticker, data_sources)
     
-    # Source 3: Yahoo web scraping (backup)
-    try:
-        yahoo_web_data = scrape_yahoo_web_targets(ticker)
-        if yahoo_web_data['data_quality'] in ['high', 'medium']:
-            data_sources['yahoo_web'] = yahoo_web_data
-            print(f"    Yahoo Web: {yahoo_web_data['data_quality']} quality")
-        else:
-            print(f"     Yahoo Web: {yahoo_web_data['data_quality']} quality")
-    except Exception as e:
-        print(f"   ❌ Yahoo Web failed: {e}")
+    # Source 2: MarketWatch scraping (conditional based on flag)
+    if _is_marketwatch_enabled():
+        try:
+            mw_data = scrape_marketwatch_consensus(ticker)
+            if mw_data['data_quality'] in ['high', 'medium']:
+                data_sources['marketwatch'] = mw_data
+                print(f"    MarketWatch: {mw_data['data_quality']} quality")
+                
+                # Add to target prices for next quality check
+                if mw_data.get('consensus_target'):
+                    target_prices.append(mw_data['consensus_target'])
+            else:
+                print(f"     MarketWatch: {mw_data['data_quality']} quality")
+        except Exception as e:
+            print(f"   ❌ MarketWatch failed: {e}")
+    else:
+        print(f"     MarketWatch scraping disabled via ENABLE_MW_SCRAPE")
+    
+    # Check again if we now have sufficient data
+    if _assess_data_quality(data_sources, target_prices):
+        print(f"    Sufficient data quality after MarketWatch - skipping Yahoo web scraping")
+        return aggregate_analyst_data(ticker, data_sources)
+    
+    # Source 3: Yahoo web scraping (conditional based on flag - only if other sources failed)
+    if _is_yahoo_web_enabled():
+        try:
+            yahoo_web_data = scrape_yahoo_web_targets(ticker)
+            if yahoo_web_data['data_quality'] in ['high', 'medium']:
+                data_sources['yahoo_web'] = yahoo_web_data
+                print(f"    Yahoo Web: {yahoo_web_data['data_quality']} quality")
+            else:
+                print(f"     Yahoo Web: {yahoo_web_data['data_quality']} quality")
+        except Exception as e:
+            print(f"   ❌ Yahoo Web failed: {e}")
+    else:
+        print(f"     Yahoo web scraping disabled via ENABLE_YF_WEB_SCRAPE")
     
     return aggregate_analyst_data(ticker, data_sources)
 
@@ -379,6 +465,7 @@ def aggregate_analyst_data(ticker, data_sources):
             'recommendation_score': None,
             'confidence_level': 0,
             'data_sources': [],
+            'rating_distribution': {'buy': 0, 'hold': 0, 'sell': 0},
             'aggregated_at': datetime.now().isoformat(),
             'quality': 'failed'
         }
@@ -387,6 +474,7 @@ def aggregate_analyst_data(ticker, data_sources):
     target_prices = []
     analyst_counts = []
     recommendation_scores = []
+    rating_distribution = {'buy': 0, 'hold': 0, 'sell': 0}
     
     # Extract data from each source
     for source_name, source_data in data_sources.items():
@@ -408,6 +496,11 @@ def aggregate_analyst_data(ticker, data_sources):
                 target_prices.append(source_data['consensus_target'])
             if source_data.get('analyst_count'):
                 analyst_counts.append(source_data['analyst_count'])
+            
+            # Aggregate rating distribution from MarketWatch
+            mw_ratings = source_data.get('rating_distribution', {})
+            for rating_type in ['buy', 'hold', 'sell']:
+                rating_distribution[rating_type] += mw_ratings.get(rating_type, 0)
                 
         elif source_name == 'yahoo_web':
             targets = source_data.get('targets', {})
@@ -453,6 +546,7 @@ def aggregate_analyst_data(ticker, data_sources):
         'recommendation_score': avg_recommendation,
         'confidence_level': confidence,
         'data_sources': list(data_sources.keys()),
+        'rating_distribution': rating_distribution,
         'raw_targets': target_prices,
         'aggregated_at': datetime.now().isoformat(),
         'quality': quality

@@ -38,6 +38,22 @@ def create_claude_analysis_prompt(ticker, financials, analyst_data):
     recommendation = analyst_data.get('recommendation_score', 'N/A')
     confidence = analyst_data.get('confidence_level', 'N/A')
     
+    # Format rating distribution data
+    rating_dist = analyst_data.get('rating_distribution', {})
+    buy_ratings = rating_dist.get('buy', 0)
+    hold_ratings = rating_dist.get('hold', 0) 
+    sell_ratings = rating_dist.get('sell', 0)
+    total_ratings = buy_ratings + hold_ratings + sell_ratings
+    
+    # Calculate rating percentages for better context
+    buy_pct = round((buy_ratings / total_ratings) * 100, 1) if total_ratings > 0 else 0
+    hold_pct = round((hold_ratings / total_ratings) * 100, 1) if total_ratings > 0 else 0
+    sell_pct = round((sell_ratings / total_ratings) * 100, 1) if total_ratings > 0 else 0
+    
+    # Format data sources for transparency
+    data_sources = analyst_data.get('data_sources', [])
+    sources_text = ', '.join(data_sources) if data_sources else 'N/A'
+    
     prompt = f"""
 Analyze {ticker} for 12-month price targets using fundamental analysis:
 
@@ -70,6 +86,13 @@ ANALYST CONSENSUS:
 - Analyst Coverage: {analyst_count} analysts
 - Recommendation Score: {recommendation} (1=Strong Buy, 5=Strong Sell)
 - Data Confidence: {confidence}/10
+- Data Sources: {sources_text}
+
+ANALYST RATING BREAKDOWN:
+- Buy Recommendations: {buy_ratings} ({buy_pct}%)
+- Hold Recommendations: {hold_ratings} ({hold_pct}%)
+- Sell Recommendations: {sell_ratings} ({sell_pct}%)
+- Total Analyst Ratings: {total_ratings}
 
 Based on this data, provide:
 
@@ -81,10 +104,13 @@ Based on this data, provide:
 
 Requirements:
 - Use DCF-style thinking: focus on intrinsic value vs current price
-- Consider analyst consensus but form independent opinion
+- Consider analyst consensus AND rating distribution patterns
+- Weight your analysis based on data source quality and confidence
 - Factor in sector trends and market conditions
+- Consider analyst sentiment balance (buy/hold/sell breakdown)
 - Provide targets that are actionable for 12-month timeframe
 - Be conservative on buy targets, optimistic but realistic on sell targets
+- Surface confidence metrics prominently in your reasoning
 
 Format your response as:
 BUY TARGET: $XXX.XX

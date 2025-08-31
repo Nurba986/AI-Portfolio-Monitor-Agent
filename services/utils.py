@@ -6,8 +6,9 @@ Handles HTTP sessions, market hours, data formatting, and validation
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import pytz
+import os
 
 
 # Global HTTP session for requests with retry logic
@@ -178,3 +179,91 @@ def format_percentage(num):
 def calculate_portfolio_value(current_prices):
     """Calculate total portfolio value - returns 0 since no positions tracked"""
     return 0.0
+
+
+# Simple in-memory cache for data collection optimization
+_DATA_CACHE = {}
+
+
+def _is_cache_enabled():
+    """Check if data caching is enabled via environment variable"""
+    return os.environ.get('ENABLE_DATA_CACHE', 'false').lower() in ('true', '1', 'yes')
+
+
+def _get_cache_duration_minutes():
+    """Get cache duration from environment variable"""
+    try:
+        return int(os.environ.get('CACHE_DURATION_MINUTES', '30'))
+    except (ValueError, TypeError):
+        return 30  # Default to 30 minutes
+
+
+def _generate_cache_key(ticker, source_type):
+    """Generate cache key for ticker and source type"""
+    today = datetime.now().strftime('%Y-%m-%d')
+    return f"{ticker}_{today}_{source_type}"
+
+
+def get_cached_data(ticker, source_type):
+    """Retrieve cached data for ticker and source type if valid"""
+    if not _is_cache_enabled():
+        return None
+    
+    cache_key = _generate_cache_key(ticker, source_type)
+    
+    if cache_key in _DATA_CACHE:
+        cached_item = _DATA_CACHE[cache_key]
+        cached_time = cached_item['timestamp']
+        cache_duration = _get_cache_duration_minutes()
+        
+        # Check if cache is still valid
+        if datetime.now() - cached_time < timedelta(minutes=cache_duration):
+            print(f"    Cache hit for {ticker} ({source_type})")
+            return cached_item['data']
+        else:
+            # Cache expired, remove it
+            del _DATA_CACHE[cache_key]
+            print(f"    Cache expired for {ticker} ({source_type})")
+    
+    return None
+
+
+def cache_data(ticker, source_type, data):
+    """Cache data for ticker and source type with timestamp"""
+    if not _is_cache_enabled():
+        return
+    
+    cache_key = _generate_cache_key(ticker, source_type)
+    _DATA_CACHE[cache_key] = {
+        'timestamp': datetime.now(),
+        'data': data
+    }
+    print(f"    Cached data for {ticker} ({source_type})")
+
+
+def clear_cache():
+    """Clear all cached data"""
+    global _DATA_CACHE
+    _DATA_CACHE = {}
+    print("Cache cleared")
+
+
+def get_cache_stats():
+    """Get cache statistics"""
+    if not _is_cache_enabled():
+        return {'enabled': False}
+    
+    total_items = len(_DATA_CACHE)
+    expired_items = 0
+    cache_duration = _get_cache_duration_minutes()
+    
+    for item in _DATA_CACHE.values():
+        if datetime.now() - item['timestamp'] >= timedelta(minutes=cache_duration):
+            expired_items += 1
+    
+    return {
+        'enabled': True,
+        'total_items': total_items,
+        'expired_items': expired_items,
+        'cache_duration_minutes': cache_duration
+    }

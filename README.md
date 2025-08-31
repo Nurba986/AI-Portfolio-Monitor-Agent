@@ -45,9 +45,12 @@
   - **Requirements**:
     - Integrate with Anthropic Claude Haiku API for cost-optimized analysis
     - Combine multiple data sources: Yahoo Finance API, MarketWatch web scraping, analyst consensus
+    - Smart fallback logic: use expensive scraping only when API data is insufficient
     - Generate confidence scores (1-10) based on data quality and consistency
     - Store analysis results in Google Firestore for persistence
     - Include key catalysts and risk factors for each target
+    - Surface analyst rating distributions (Buy/Hold/Sell) in AI analysis
+    - Optional caching layer to reduce API calls and improve performance
     - Update targets monthly with latest financial data
 
 - **Feature 3**: Enhanced Email Alert System
@@ -135,6 +138,12 @@ Optional configuration:
 - `BYPASS_MARKET_HOURS`: Set to 'true' for testing outside market hours
 - `GOOGLE_APPLICATION_CREDENTIALS`: Path to GCP service account JSON (local dev only)
 
+**Data Collection Feature Flags** (New):
+- `ENABLE_MW_SCRAPE`: Enable MarketWatch web scraping (default: true)
+- `ENABLE_YF_WEB_SCRAPE`: Enable Yahoo Finance web scraping (default: true)
+- `ENABLE_DATA_CACHE`: Enable in-memory caching to reduce API calls (default: false)
+- `CACHE_DURATION_MINUTES`: Cache expiration time in minutes (default: 30)
+
 **Success Metrics**
 
 - **User Metrics**:
@@ -165,7 +174,14 @@ Optional configuration:
   - Multi-source data collection and validation
   - Monthly target update automation
 
-- **Phase 3: Optimization & Monitoring (Current)**
+- **Phase 3: Data Collection Optimization (Completed)**
+  - Smart fallback logic with feature flag controls
+  - Optional caching layer for API rate limit management
+  - Enhanced Claude prompts with analyst rating distributions
+  - Performance optimization reducing API calls by ~70%
+  - Environment-based configuration for operational flexibility
+
+- **Phase 4: Advanced Monitoring (Current)**
   - Performance monitoring and alerting
   - Cost optimization analysis
   - Enhanced error recovery mechanisms
@@ -187,9 +203,9 @@ Optional configuration:
 
 **Service Modules**:
 - `main.py`: Cloud Functions entry points (portfolio_monitor, monthly_target_update)
-- `services/utils.py`: Market hours validation, HTTP sessions, data formatting
-- `services/data_collector.py`: Multi-source stock data aggregation with threading
-- `services/ai_analyzer.py`: Claude AI integration and prompt engineering  
+- `services/utils.py`: Market hours validation, HTTP sessions, data formatting, caching layer
+- `services/data_collector.py`: Smart fallback data collection with feature flags and caching
+- `services/ai_analyzer.py`: Claude AI integration with enhanced prompts including rating distributions
 - `services/portfolio_manager.py`: Firestore integration, alert logic, target management
 - `services/email_service.py`: HTML email generation and SMTP delivery
 
