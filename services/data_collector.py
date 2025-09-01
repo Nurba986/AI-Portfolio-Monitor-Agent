@@ -132,27 +132,102 @@ def get_stock_prices_fast(portfolio_tickers):
         print(f"📊 DataFrame empty: {df.empty}")
         if not df.empty:
             print(f"📊 DataFrame shape: {df.shape}, columns: {list(df.columns)}")
-            # Handle both single and multi-ticker cases
-            if len(tickers_list) == 1:
-                # Single ticker case
-                last_price = df["Adj Close"].iloc[-1] if "Adj Close" in df else df["Close"].iloc[-1]
-                if last_price and last_price > 0:
-                    return {tickers_list[0]: round(float(last_price), 2)}
-            else:
-                # Multi-ticker case
-                adj_close = df["Adj Close"] if "Adj Close" in df else df["Close"]
-                last_prices = adj_close.iloc[-1]
-                
-                prices = {}
-                for ticker in tickers_list:
-                    if ticker in last_prices:
-                        price = last_prices[ticker]
-                        if price and price > 0:
-                            prices[ticker] = round(float(price), 2)
-                            print(f"    {ticker}: ${price:.2f}")
+            
+            # Enhanced DataFrame handling with multi-index awareness
+            prices = {}
+            try:
+                # Check if DataFrame has MultiIndex columns
+                if hasattr(df.columns, 'levels'):
+                    print("📊 MultiIndex DataFrame detected")
+                    # Multi-ticker case with MultiIndex
+                    try:
+                        # Try to get Adj Close first, then Close
+                        if ('Adj Close', ) in df.columns.get_level_values(0).unique():
+                            last_prices = df['Adj Close'].iloc[-1]
+                        elif ('Close', ) in df.columns.get_level_values(0).unique():
+                            last_prices = df['Close'].iloc[-1]
+                        else:
+                            # Fallback to any price column
+                            price_cols = [col for col in df.columns.get_level_values(0) if 'close' in col.lower()]
+                            if price_cols:
+                                last_prices = df[price_cols[0]].iloc[-1]
+                            else:
+                                raise ValueError("No price columns found")
+                        
+                        for ticker in tickers_list:
+                            if ticker in last_prices and last_prices[ticker] > 0:
+                                prices[ticker] = round(float(last_prices[ticker]), 2)
+                                print(f"    {ticker}: ${last_prices[ticker]:.2f}")
+                                
+                    except Exception as multi_error:
+                        print(f"📊 MultiIndex extraction failed: {multi_error}")
+                        # Try alternative MultiIndex extraction
+                        for ticker in tickers_list:
+                            try:
+                                # Try accessing individual ticker columns
+                                if ('Adj Close', ticker) in df.columns:
+                                    price = df[('Adj Close', ticker)].iloc[-1]
+                                elif ('Close', ticker) in df.columns:
+                                    price = df[('Close', ticker)].iloc[-1]
+                                else:
+                                    continue
+                                    
+                                if price and price > 0:
+                                    prices[ticker] = round(float(price), 2)
+                                    print(f"    {ticker}: ${price:.2f}")
+                            except Exception as ticker_error:
+                                print(f"📊 Failed to extract {ticker}: {ticker_error}")
+                                continue
+                else:
+                    print("📊 Regular DataFrame (non-MultiIndex)")
+                    # Handle both single and multi-ticker cases for regular DataFrame
+                    if len(tickers_list) == 1:
+                        # Single ticker case
+                        try:
+                            if "Adj Close" in df.columns:
+                                last_price = df["Adj Close"].iloc[-1]
+                            elif "Close" in df.columns:
+                                last_price = df["Close"].iloc[-1]
+                            else:
+                                # Try any price column
+                                price_cols = [col for col in df.columns if 'close' in col.lower()]
+                                if price_cols:
+                                    last_price = df[price_cols[0]].iloc[-1]
+                                else:
+                                    raise ValueError("No price columns found")
+                            
+                            if last_price and last_price > 0:
+                                prices[tickers_list[0]] = round(float(last_price), 2)
+                                print(f"    {tickers_list[0]}: ${last_price:.2f}")
+                        except Exception as single_error:
+                            print(f"📊 Single ticker extraction failed: {single_error}")
+                    else:
+                        # Multi-ticker case with regular DataFrame
+                        try:
+                            if "Adj Close" in df.columns:
+                                last_prices = df["Adj Close"].iloc[-1]
+                            elif "Close" in df.columns:
+                                last_prices = df["Close"].iloc[-1]
+                            else:
+                                raise ValueError("No price columns found")
+                            
+                            for ticker in tickers_list:
+                                if ticker in last_prices and last_prices[ticker] > 0:
+                                    prices[ticker] = round(float(last_prices[ticker]), 2)
+                                    print(f"    {ticker}: ${last_prices[ticker]:.2f}")
+                        except Exception as multi_error:
+                            print(f"📊 Multi-ticker extraction failed: {multi_error}")
                 
                 if prices:
+                    print(f"📊 Successfully extracted {len(prices)} prices from DataFrame")
                     return prices
+                else:
+                    print(f"📊 No valid prices extracted from DataFrame")
+                    
+            except Exception as df_error:
+                print(f"📊 DataFrame processing failed: {df_error}")
+                import traceback
+                print(f"📊 DataFrame error traceback: {traceback.format_exc()[:200]}...")
         else:
             print("❌ DataFrame is empty from yfinance")
     except Exception as e:
@@ -189,12 +264,27 @@ def get_stock_prices_fast(portfolio_tickers):
             
             # Fallback to regular info
             info = stock.info
-            price = info.get('currentPrice') or info.get('regularMarketPrice')
+            price = (info.get('currentPrice') or 
+                    info.get('regularMarketPrice') or 
+                    info.get('ask') or 
+                    info.get('bid'))
             if price and price > 0:
                 print(f"✅ {ticker}: info price ${price:.2f}")
                 return ticker, round(float(price), 2)
             else:
                 print(f"❌ {ticker}: no valid price in info")
+                
+            # Final fallback: try 1-day history
+            try:
+                print(f"📊 {ticker}: trying 1-day history fallback...")
+                hist = stock.history(period='1d')
+                if not hist.empty and 'Close' in hist.columns:
+                    last_close = hist['Close'].iloc[-1]
+                    if last_close and last_close > 0:
+                        print(f"✅ {ticker}: history price ${last_close:.2f}")
+                        return ticker, round(float(last_close), 2)
+            except Exception as hist_error:
+                print(f"📊 {ticker}: history fallback failed: {hist_error}")
                 
         except Exception as e:
             print(f"❌ Error fetching {ticker}: {e}")
@@ -243,9 +333,9 @@ def scrape_marketwatch_consensus(ticker):
         consensus_target = None
         analyst_count = None
         
-        # Look for price target in various possible locations
+        # Look for price target in various possible locations (fixed deprecated syntax)
         price_target_elements = soup.find_all(['span', 'div', 'td'], 
-                                            text=re.compile(r'\$[\d,]+\.?\d*'))
+                                            string=re.compile(r'\$[\d,]+\.?\d*'))
         
         for element in price_target_elements:
             text = element.get_text()
@@ -256,8 +346,8 @@ def scrape_marketwatch_consensus(ticker):
                     consensus_target = float(price_match.group(1).replace(',', ''))
                     break
         
-        # Extract number of analysts
-        analyst_elements = soup.find_all(text=re.compile(r'\d+\s*analyst'))
+        # Extract number of analysts (fixed deprecated syntax)
+        analyst_elements = soup.find_all(string=re.compile(r'\d+\s*analyst'))
         for element in analyst_elements:
             analyst_match = re.search(r'(\d+)\s*analyst', element)
             if analyst_match:
@@ -267,8 +357,8 @@ def scrape_marketwatch_consensus(ticker):
         # Extract rating distribution (Buy/Hold/Sell)
         rating_distribution = {'buy': 0, 'hold': 0, 'sell': 0}
         
-        # Look for rating counts
-        rating_elements = soup.find_all(['td', 'span'], text=re.compile(r'\d+'))
+        # Look for rating counts (fixed deprecated syntax)
+        rating_elements = soup.find_all(['td', 'span'], string=re.compile(r'\d+'))
         buy_keywords = ['buy', 'strong buy']
         hold_keywords = ['hold', 'neutral']
         sell_keywords = ['sell', 'strong sell']
@@ -338,9 +428,9 @@ def scrape_yahoo_web_targets(ticker):
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Extract price targets from analyst section
+        # Extract price targets from analyst section (fixed deprecated syntax)
         target_elements = soup.find_all(['span', 'div'], 
-                                      text=re.compile(r'\d+\.\d+'))
+                                      string=re.compile(r'\d+\.\d+'))
         
         targets = {'mean': None, 'high': None, 'low': None}
         

@@ -6,6 +6,8 @@ Handles Claude integration, prompt engineering, and target generation
 import os
 import re
 import anthropic
+import time
+import random
 from datetime import datetime, timezone
 from .utils import format_number, format_percentage
 
@@ -140,18 +142,50 @@ def analyze_with_claude(ticker, financials, analyst_data):
         
         print(f"  > Analyzing {ticker} with Claude...")
         
-        # Make API call to Claude
-        message = client.messages.create(
-            model="claude-3-haiku-20240307",  # Use faster, cheaper model
-            max_tokens=500,
-            temperature=0.3,  # Lower temperature for more consistent analysis
-            messages=[
-                {
-                    "role": "user", 
-                    "content": prompt
-                }
-            ]
-        )
+        # Make API call to Claude with retry logic
+        max_retries = 3
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    delay = (2 ** attempt) + random.uniform(0, 1)
+                    print(f"     Retry {attempt + 1}/{max_retries} after {delay:.1f}s delay")
+                    time.sleep(delay)
+                
+                start_time = time.time()
+                message = client.messages.create(
+                    model="claude-3-haiku-20240307",  # Use faster, cheaper model
+                    max_tokens=500,
+                    temperature=0.3,  # Lower temperature for more consistent analysis
+                    messages=[
+                        {
+                            "role": "user", 
+                            "content": prompt
+                        }
+                    ]
+                )
+                end_time = time.time()
+                
+                # Log token usage and cost if available
+                if hasattr(message, 'usage'):
+                    input_tokens = message.usage.input_tokens
+                    output_tokens = message.usage.output_tokens
+                    # Claude Haiku pricing: $0.25/1M input, $1.25/1M output
+                    cost = (input_tokens / 1_000_000) * 0.25 + (output_tokens / 1_000_000) * 1.25
+                    print(f"     Tokens: {input_tokens}in+{output_tokens}out, ~${cost:.4f}, {end_time-start_time:.1f}s")
+                
+                break  # Success, exit retry loop
+                
+            except (anthropic.RateLimitError, anthropic.InternalServerError) as e:
+                last_error = e
+                print(f"     Attempt {attempt + 1} failed: {type(e).__name__}")
+                if attempt == max_retries - 1:
+                    raise e
+                continue
+            except Exception as e:
+                print(f"     Non-retryable error: {type(e).__name__}: {e}")
+                raise e
         
         # Parse Claude response
         response_text = message.content[0].text

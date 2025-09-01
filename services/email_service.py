@@ -8,10 +8,11 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
+import pytz
 
 
 def _setup_smtp_connection():
-    """Setup and return configured SMTP connection with proper error handling"""
+    """Setup and return configured SMTP connection with proper error handling and TLS"""
     # Validate environment variables
     sender_email = os.environ.get('GMAIL_USER')
     sender_password = os.environ.get('GMAIL_PASSWORD')
@@ -26,7 +27,10 @@ def _setup_smtp_connection():
     try:
         # Configure SMTP with timeout
         server = smtplib.SMTP('smtp.gmail.com', 587, timeout=30)
+        # Proper TLS setup with ehlo() before and after
+        server.ehlo()
         server.starttls()
+        server.ehlo()  # Second ehlo() after starttls() as per best practices
         server.login(sender_email, sender_password)
         print("SMTP authentication successful")
         
@@ -40,8 +44,9 @@ def _setup_smtp_connection():
 
 
 def _send_email(subject, html_body, max_retries=3):
-    """Common email sending functionality with retry logic and better error handling"""
+    """Common email sending functionality with retry logic, proper charset, and socket cleanup"""
     last_error = None
+    server = None
     
     for attempt in range(max_retries):
         try:
@@ -52,19 +57,18 @@ def _send_email(subject, html_body, max_retries=3):
             
             print(f"Sending email to {recipient}")
             
-            # Create and send email
+            # Create email with proper UTF-8 charset for emoji/special character support
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = sender_email
             msg['To'] = recipient
-            msg.attach(MIMEText(html_body, 'html'))
+            msg.attach(MIMEText(html_body, 'html', 'utf-8'))
             
             # Send with explicit error checking
             refused = server.send_message(msg)
             if refused:
                 raise smtplib.SMTPRecipientsRefused(f"Recipients refused: {refused}")
             
-            server.quit()
             print(f"Email sent successfully to {recipient}")
             
             return True, recipient
@@ -81,6 +85,13 @@ def _send_email(subject, html_body, max_retries=3):
             last_error = e
             print(f"Unexpected error during email attempt {attempt + 1}: {e}")
             break
+        finally:
+            # Ensure server connection is properly closed to avoid leaked sockets
+            if server:
+                try:
+                    server.quit()
+                except:
+                    pass  # Ignore errors when closing connection
     
     error_msg = f"Failed to send email after {max_retries} attempts. Last error: {last_error}"
     print(f"ERROR: {error_msg}")
@@ -103,7 +114,7 @@ def send_enhanced_email(alerts, current_prices, dynamic_targets):
         <html>
         <body style="font-family: Arial, sans-serif; margin: 20px;">
             <h2 style="color: #1a73e8;">=> Daily Portfolio Summary</h2>
-            <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d at %H:%M:%S ET')}</p>
+            <p><strong>Date:</strong> {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d at %H:%M:%S ET')}</p>
             <p><strong>Signal Summary:</strong> {buy_alerts} Buy, {sell_alerts} Sell, {watch_alerts} Watch Opportunities</p>
             <p><strong>Portfolio:</strong> {len(current_prices)} stocks monitored with AI-powered targets (daily at 3 PM ET)</p>
             
@@ -257,7 +268,7 @@ def send_target_update_email(updated_targets, estimated_cost):
         <html>
         <body style="font-family: Arial, sans-serif; margin: 20px;">
             <h2 style="color: #1a73e8;">=> Monthly Target Update</h2>
-            <p><strong>Update Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</p>
+            <p><strong>Update Time:</strong> {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %H:%M:%S ET')}</p>
             <p><strong>Stocks Analyzed:</strong> {len(updated_targets)}</p>
             <p><strong>Estimated Cost:</strong> ${estimated_cost:.2f}</p>
             
@@ -356,7 +367,7 @@ def send_email(alerts, current_prices, portfolio_config):
         <html>
         <body style="font-family: Arial, sans-serif; margin: 20px;">
             <h2 style="color: #1a73e8;">=> Portfolio Alert</h2>
-            <p><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}</p>
+            <p><strong>Time:</strong> {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %H:%M:%S ET')}</p>
             <p><strong>Monitoring:</strong> {len(current_prices)} stocks</p>
             
             <h3 style="color: #ea4335;">=> Alerts ({len(alerts)})</h3>

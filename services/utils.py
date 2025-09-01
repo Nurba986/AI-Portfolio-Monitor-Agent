@@ -49,11 +49,13 @@ def get_http_session():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     })
     
-    # Configure retry strategy
+    # Configure retry strategy with enhanced parameters
     retry_strategy = Retry(
         total=3,
         backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504]
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods={'GET'},  # Only retry GET requests
+        raise_on_status=False     # Don't raise exception on status errors
     )
     
     adapter = HTTPAdapter(max_retries=retry_strategy)

@@ -45,7 +45,11 @@ def load_targets_from_firestore(portfolio_config):
                     print(f"  ⚠️ Using fallback targets for {ticker}")
                     
             except Exception as e:
-                print(f"  ⚠️ Error loading {ticker} from Firestore: {e}")
+                print(f"  ⚠️ Error loading {ticker} from Firestore: {type(e).__name__}: {e}")
+                # Log additional context for debugging
+                import os
+                project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'unknown')
+                print(f"     Context: Project={project_id}, Document=portfolio_targets/{ticker}")
                 # Use hardcoded fallback
                 portfolio_targets[ticker] = {
                     'buy_target': portfolio_config[ticker]['buy_target'],
@@ -61,7 +65,13 @@ def load_targets_from_firestore(portfolio_config):
         return portfolio_targets
         
     except Exception as e:
-        print(f"⚠️ Failed to connect to Firestore: {e}")
+        print(f"⚠️ Failed to connect to Firestore: {type(e).__name__}: {e}")
+        # Log additional context for debugging
+        import os
+        project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'unknown')
+        creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'not_set')
+        print(f"     Context: Project={project_id}, Credentials={creds_path}")
+        print(f"     Collection: portfolio_targets, Operation: bulk_load")
         print("📊 Using hardcoded portfolio targets as fallback")
         
         # Return hardcoded targets as fallback
@@ -214,5 +224,15 @@ def save_targets_to_firestore(ticker, claude_analysis, analyst_data, financials)
         return target_doc
         
     except Exception as e:
-        print(f"  ⚠️ Failed to save {ticker} to Firestore: {e}")
+        print(f"  ⚠️ Failed to save {ticker} to Firestore: {type(e).__name__}: {e}")
+        # Log additional context for debugging
+        import os
+        project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'unknown')
+        print(f"     Context: Project={project_id}, Document=portfolio_targets/{ticker}")
+        print(f"     Operation: save_target, Data_size={len(str(target_doc))} chars")
+        # Log if specific Firestore errors
+        if 'permission' in str(e).lower():
+            print(f"     Hint: Check Firestore permissions for project {project_id}")
+        elif 'quota' in str(e).lower():
+            print(f"     Hint: Check Firestore quotas and billing for project {project_id}")
         return None
