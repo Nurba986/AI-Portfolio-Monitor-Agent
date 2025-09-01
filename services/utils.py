@@ -66,7 +66,7 @@ def get_http_session():
     return session
 
 
-def is_market_open(bypass_for_testing=False):
+def is_market_open(bypass_for_testing=False, simulate_time_et: str | None = None):
     """
     Check if the US stock market is currently open
     Args:
@@ -84,9 +84,39 @@ def is_market_open(bypass_for_testing=False):
         print("BYPASS_MARKET_HOURS enabled - skipping market hours validation")
         return True, "Market hours bypassed via BYPASS_MARKET_HOURS environment variable"
     
-    # Get current time in Eastern Time (market timezone)
+    # Get current time in Eastern Time (market timezone), with optional simulation
     et_tz = pytz.timezone('America/New_York')
-    now_et = datetime.now(et_tz)
+    # Support simulation via function arg or env var (ISO-like strings, e.g. "2025-08-01T10:15")
+    if simulate_time_et is None:
+        simulate_time_et = os.environ.get('SIMULATE_TIME_ET')
+
+    if simulate_time_et:
+        try:
+            # Parse as naive local ET or ISO with offset; normalize to ET
+            # Examples: "2025-08-01T10:15", "2025-08-01 10:15", "2025-08-01T10:15-04:00"
+            from datetime import datetime as _dt
+            parsed = None
+            for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    parsed = _dt.strptime(simulate_time_et, fmt)
+                    break
+                except Exception:
+                    continue
+            if parsed is not None:
+                now_et = et_tz.localize(parsed)
+            else:
+                # Fallback: try fromisoformat with offset
+                parsed_iso = _dt.fromisoformat(simulate_time_et.replace('Z', '+00:00'))
+                if parsed_iso.tzinfo is None:
+                    now_et = et_tz.localize(parsed_iso)
+                else:
+                    now_et = parsed_iso.astimezone(et_tz)
+            print(f"SIMULATION: Using simulated ET time {now_et.isoformat()}")
+        except Exception as _e:
+            print(f"SIMULATION: Failed to parse SIMULATE_TIME_ET='{simulate_time_et}': {_e}")
+            now_et = datetime.now(et_tz)
+    else:
+        now_et = datetime.now(et_tz)
     current_date = now_et.date()
     current_time = now_et.time()
     

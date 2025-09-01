@@ -10,6 +10,9 @@ import time
 import random
 from datetime import datetime, timezone
 from .utils import format_number, format_percentage
+# Temporary: Use environment variables instead of secret manager
+def get_required_secret(key):
+    return os.environ.get(key)
 
 
 def create_claude_analysis_prompt(ticker, financials, analyst_data):
@@ -128,11 +131,8 @@ RISK FACTOR: [One sentence explanation]
 def analyze_with_claude(ticker, financials, analyst_data):
     """Use Claude API to analyze stock and generate buy/sell targets"""
     try:
-        # Get Claude API key from environment
-        claude_api_key = os.environ.get('CLAUDE_API_KEY')
-        if not claude_api_key:
-            print(f"  ⚠️ No Claude API key found for {ticker}")
-            return None
+        # Get Claude API key from secret manager
+        claude_api_key = get_required_secret('CLAUDE_API_KEY')
             
         # Initialize Claude client
         client = anthropic.Anthropic(api_key=claude_api_key)

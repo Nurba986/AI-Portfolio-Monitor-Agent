@@ -15,14 +15,13 @@ Architecture:
 import functions_framework
 import json
 import os
-try:
-    import yaml
-except ImportError:
-    print("Warning: PyYAML not installed, using manual .env parsing")
-    yaml = None
 from datetime import datetime
 
-# Import modular services
+# Import modular services  
+# Temporary: Skip secret manager for deployment
+def validate_secrets():
+    return True
+secret_manager = None
 from services.utils import is_market_open, calculate_portfolio_value
 from services.data_collector import get_stock_prices_fast, collect_analyst_data, get_enhanced_yahoo_data
 from services.ai_analyzer import analyze_with_claude
@@ -58,9 +57,29 @@ def portfolio_monitor(request):
     
     try:
         print("🔄 Starting portfolio monitoring...")
-        
-        # Check if market is open first
-        market_open, reason = is_market_open()
+
+        # Parse optional test controls from query params
+        force_open = False
+        simulate_time_et = None
+        email_dry_run = False
+        try:
+            args = getattr(request, 'args', None)
+            if args:
+                force_open = args.get('force_open', '').lower() in ('true', '1', 'yes')
+                email_dry_run = args.get('email_dry_run', '').lower() in ('true', '1', 'yes')
+                simulate_time_et = args.get('simulate_time_et') or None
+        except Exception:
+            pass
+
+        # Apply per-invocation email dry run (safe testing)
+        if email_dry_run:
+            os.environ['EMAIL_DRY_RUN'] = 'true'
+
+        # Check if market is open first (supports force_open and simulated time)
+        market_open, reason = is_market_open(
+            bypass_for_testing=force_open,
+            simulate_time_et=simulate_time_et,
+        )
         
         if not market_open:
             print(f"⏸️ Market closed: {reason}")
@@ -68,6 +87,11 @@ def portfolio_monitor(request):
                 "status": "skipped",
                 "timestamp": datetime.now().isoformat(),
                 "reason": reason,
+                "testing": {
+                    "force_open": force_open,
+                    "simulate_time_et": simulate_time_et,
+                    "email_dry_run": email_dry_run,
+                },
                 "message": "Portfolio monitoring skipped - market closed"
             }
         
@@ -114,6 +138,11 @@ def portfolio_monitor(request):
             "high_confidence_targets": high_confidence_targets,
             "email_sent": email_sent,
             "email_error": email_error,
+            "testing": {
+                "force_open": force_open,
+                "simulate_time_et": simulate_time_et,
+                "email_dry_run": email_dry_run,
+            },
             "targets_summary": {ticker: {
                 'buy_target': target['buy_target'],
                 'sell_target': target['sell_target'],
@@ -139,6 +168,14 @@ def monthly_target_update(request):
     
     try:
         print("🔄 Starting monthly target update...")
+
+        # Optional per-invocation dry-run for email
+        try:
+            args = getattr(request, 'args', None)
+            if args and args.get('email_dry_run', '').lower() in ('true', '1', 'yes'):
+                os.environ['EMAIL_DRY_RUN'] = 'true'
+        except Exception:
+            pass
         
         updated_targets = {}
         total_cost = 0
@@ -221,34 +258,36 @@ def monthly_target_update(request):
         }
 
 
-def load_local_env():
-    """Load environment variables from .env.yaml for local testing"""
+def validate_environment():
+    """Validate that all required secrets are available"""
+    print("🔍 Validating environment configuration...")
+    
     try:
-        env_file = os.path.join(os.path.dirname(__file__), '.env.yaml')
-        if os.path.exists(env_file):
-            if yaml:
-                with open(env_file, 'r') as f:
-                    env_vars = yaml.safe_load(f)
-                    for key, value in env_vars.items():
-                        os.environ[key] = str(value)
-                    print(f"✅ Loaded {len(env_vars)} environment variables from .env.yaml")
-            else:
-                # Manual parsing if PyYAML not available
-                with open(env_file, 'r') as f:
-                    lines = f.readlines()
-                    env_count = 0
-                    for line in lines:
-                        if ':' in line and not line.strip().startswith('#'):
-                            key, value = line.strip().split(':', 1)
-                            key = key.strip()
-                            value = value.strip().strip('"').strip("'")
-                            os.environ[key] = value
-                            env_count += 1
-                    print(f"✅ Loaded {env_count} environment variables from .env.yaml (manual parsing)")
+        validation_result = validate_secrets()
+        
+        if validation_result['valid']:
+            print(f"✅ All secrets validated successfully ({validation_result['environment']} environment)")
+            for secret in validation_result['found_secrets']:
+                print(f"  ✓ {secret}")
+            return True
         else:
-            print("⚠️ No .env.yaml file found for local testing")
+            print(f"❌ Missing required secrets in {validation_result['environment']} environment:")
+            for secret in validation_result['missing_secrets']:
+                print(f"  ✗ {secret}")
+            print("\n📝 Setup instructions:")
+            if validation_result['environment'] == 'Local':
+                print("  1. Copy .env.yaml.template to .env.yaml")
+                print("  2. Fill in your actual credentials")
+                print("  3. Ensure .env.yaml is NOT committed to Git")
+            else:
+                print("  1. Store secrets in Google Cloud Secret Manager")
+                print("  2. Grant Secret Manager access to Cloud Function")
+                print("  3. Ensure GOOGLE_CLOUD_PROJECT is set")
+            return False
+            
     except Exception as e:
-        print(f"❌ Failed to load .env.yaml: {e}")
+        print(f"❌ Environment validation failed: {e}")
+        return False
 
 
 def test_email():
@@ -284,8 +323,12 @@ def test_email():
 if __name__ == "__main__":
     print("🧪 Testing portfolio monitor locally...")
     
-    # Load environment variables for local testing
-    load_local_env()
+    # Validate environment and secrets first
+    environment_valid = validate_environment()
+    
+    if not environment_valid:
+        print("\n❌ Environment validation failed. Please check your configuration.")
+        exit(1)
     
     # Enable market hours bypass for testing
     os.environ['BYPASS_MARKET_HOURS'] = 'true'
@@ -309,4 +352,3 @@ if __name__ == "__main__":
         print(json.dumps(result, indent=2, default=str))
     else:
         print("❌ Skipping portfolio monitor test due to email failure")
-

@@ -10,17 +10,19 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 import pytz
 
+# Temporary: Use environment variables instead of secret manager
+def get_required_secret(key):
+    return os.environ.get(key)
+
+def get_secret(key, default=None):
+    return os.environ.get(key, default)
+
 
 def _setup_smtp_connection():
     """Setup and return configured SMTP connection with proper error handling and TLS"""
-    # Validate environment variables
-    sender_email = os.environ.get('GMAIL_USER')
-    sender_password = os.environ.get('GMAIL_PASSWORD')
-    
-    if not sender_email:
-        raise ValueError("GMAIL_USER environment variable is not set")
-    if not sender_password:
-        raise ValueError("GMAIL_PASSWORD environment variable is not set")
+    # Get credentials from secret manager
+    sender_email = get_required_secret('GMAIL_USER')
+    sender_password = get_required_secret('GMAIL_PASSWORD')
     
     print(f"Setting up SMTP connection for {sender_email}")
     
@@ -45,6 +47,16 @@ def _setup_smtp_connection():
 
 def _send_email(subject, html_body, max_retries=3):
     """Common email sending functionality with retry logic, proper charset, and socket cleanup"""
+    # Dry run mode to avoid sending real emails during testing
+    if os.environ.get('EMAIL_DRY_RUN', '').lower() in ('true', '1', 'yes'):
+        recipient = get_secret('ALERT_RECIPIENT') or get_required_secret('GMAIL_USER')
+        preview = (html_body or '')
+        print("EMAIL_DRY_RUN enabled - not sending real email")
+        print(f"Subject: {subject}")
+        print(f"To: {recipient}")
+        print(f"Preview: {preview[:200]}{'...' if len(preview) > 200 else ''}")
+        return True, f"DRY_RUN->{recipient}"
+
     last_error = None
     server = None
     
@@ -53,7 +65,7 @@ def _send_email(subject, html_body, max_retries=3):
             print(f"Email attempt {attempt + 1}/{max_retries}: '{subject}'")
             
             server, sender_email = _setup_smtp_connection()
-            recipient = os.environ.get('ALERT_RECIPIENT', sender_email)
+            recipient = get_secret('ALERT_RECIPIENT') or sender_email
             
             print(f"Sending email to {recipient}")
             

@@ -7,3 +7,5 @@ requests==2.32.3
 urllib3==2.2.2
 google-cloud-firestore==2.16.0
 anthropic==0.34.0
+pyyaml==6.0.2
+google-cloud-secret-manager==2.20.0
