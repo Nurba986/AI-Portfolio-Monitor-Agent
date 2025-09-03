@@ -5,3 +5,4 @@ portfolio-env/
 .gcloudignore
 CLAUDE.md
 prd.md
+.docs
