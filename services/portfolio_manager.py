@@ -3,7 +3,7 @@ Portfolio management services for Portfolio Agent
 Handles target loading, alert generation, and portfolio calculations
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from google.cloud import firestore
 
 
@@ -236,3 +236,61 @@ def save_targets_to_firestore(ticker, claude_analysis, analyst_data, financials)
         elif 'quota' in str(e).lower():
             print(f"     Hint: Check Firestore quotas and billing for project {project_id}")
         return None
+
+
+def _parse_iso_to_utc(dt_value):
+    """Parse ISO timestamp or datetime to timezone-aware UTC datetime"""
+    try:
+        if isinstance(dt_value, datetime):
+            if dt_value.tzinfo is None:
+                return dt_value.replace(tzinfo=timezone.utc)
+            return dt_value.astimezone(timezone.utc)
+        if isinstance(dt_value, str):
+            dt_str = dt_value.replace('Z', '+00:00')
+            parsed = datetime.fromisoformat(dt_str)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+    except Exception as e:
+        print(f"  ⚠️ Failed to parse timestamp '{dt_value}': {e}")
+    return None
+
+
+def can_send_summary(kind: str = 'daily_summary', cooldown_minutes: int = 60):
+    """Check Firestore for last send time; enforce cooldown window"""
+    try:
+        db = firestore.Client()
+        doc_ref = db.collection('system_status').document(kind)
+        doc = doc_ref.get()
+        now_utc = datetime.now(timezone.utc)
+        if doc.exists:
+            data = doc.to_dict()
+            last_sent_val = data.get('last_sent')
+            last_sent = _parse_iso_to_utc(last_sent_val)
+            if last_sent:
+                delta = now_utc - last_sent
+                if delta < timedelta(minutes=cooldown_minutes):
+                    remaining = int((timedelta(minutes=cooldown_minutes) - delta).total_seconds() // 60)
+                    print(f"⏳ Dedup: last '{kind}' sent {int(delta.total_seconds()//60)} min ago; {remaining} min left in cooldown")
+                    return False, remaining
+        return True, None
+    except Exception as e:
+        print(f"⚠️ Dedup check failed ({type(e).__name__}): {e}. Proceeding to send.")
+        return True, None
+
+
+def mark_summary_sent(kind: str = 'daily_summary', meta: dict | None = None):
+    """Record that a summary email was sent now with optional metadata"""
+    try:
+        db = firestore.Client()
+        doc_ref = db.collection('system_status').document(kind)
+        payload = {
+            'last_sent': datetime.now(timezone.utc).isoformat(),
+            'meta': meta or {}
+        }
+        doc_ref.set(payload)
+        print(f"✅ Dedup: recorded '{kind}' sent")
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed to record dedup state: {type(e).__name__}: {e}")
+        return False

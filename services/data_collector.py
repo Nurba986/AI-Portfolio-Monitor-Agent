@@ -23,6 +23,135 @@ def _is_yahoo_web_enabled():
     return os.environ.get('ENABLE_YF_WEB_SCRAPE', 'true').lower() in ('true', '1', 'yes')
 
 
+def get_alternative_price(ticker):
+    """Get stock price from alternative free API sources"""
+    import time
+    import random
+    
+    try:
+        session = get_http_session()
+        
+        # Method 1: Yahoo Finance alternative chart endpoint (most reliable)
+        print(f"🔄 Trying Yahoo chart API for {ticker}...")
+        url1 = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+        
+        # Add random delay to avoid rate limiting
+        time.sleep(random.uniform(0.5, 1.5))
+        
+        response = session.get(url1, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            result = data.get('chart', {}).get('result', [])
+            if result:
+                meta = result[0].get('meta', {})
+                current_price = meta.get('regularMarketPrice') or meta.get('previousClose')
+                if current_price and current_price > 0:
+                    print(f"✅ Yahoo Chart API - {ticker}: ${current_price:.2f}")
+                    return float(current_price)
+        elif response.status_code == 429:
+            print(f"⚠️ Yahoo Chart API rate limited for {ticker}")
+        
+        # Method 2: Alternative Yahoo endpoint with different format
+        print(f"🔄 Trying Yahoo quote API for {ticker}...")
+        url2 = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1m"
+        
+        time.sleep(random.uniform(1.0, 2.0))  # Longer delay
+        
+        response2 = session.get(url2, timeout=15)
+        if response2.status_code == 200:
+            data2 = response2.json()
+            result2 = data2.get('chart', {}).get('result', [])
+            if result2:
+                meta2 = result2[0].get('meta', {})
+                current_price2 = meta2.get('regularMarketPrice') or meta2.get('previousClose')
+                if current_price2 and current_price2 > 0:
+                    print(f"✅ Yahoo Quote API - {ticker}: ${current_price2:.2f}")
+                    return float(current_price2)
+        elif response2.status_code == 429:
+            print(f"⚠️ Yahoo Quote API rate limited for {ticker}")
+        
+        # Method 3: MarketData.app free tier (limited requests)
+        print(f"🔄 Trying MarketData API for {ticker}...")
+        url3 = f"https://api.marketdata.app/v1/stocks/quotes/{ticker}/?token=demo"
+        
+        time.sleep(random.uniform(0.5, 1.0))
+        
+        response3 = session.get(url3, timeout=10)
+        if response3.status_code == 200:
+            data3 = response3.json()
+            if data3.get('s') == 'ok' and data3.get('last'):
+                current_price3 = data3.get('last', [None])[0]
+                if current_price3 and current_price3 > 0:
+                    print(f"✅ MarketData API - {ticker}: ${current_price3:.2f}")
+                    return float(current_price3)
+        elif response3.status_code == 429:
+            print(f"⚠️ MarketData API rate limited for {ticker}")
+        
+        # Method 4: Simple Yahoo Finance page scraping (last resort)
+        print(f"🔄 Trying Yahoo Finance page scraping for {ticker}...")
+        from bs4 import BeautifulSoup
+        
+        url4 = f"https://finance.yahoo.com/quote/{ticker}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        time.sleep(random.uniform(2.0, 3.0))
+        
+        try:
+            response4 = session.get(url4, headers=headers, timeout=15)
+            if response4.status_code == 200:
+                soup = BeautifulSoup(response4.content, 'html.parser')
+                
+                # Look for the current price in various possible locations
+                price_selectors = [
+                    '[data-testid="qsp-price"]',
+                    '.Trsdu\\(0\\.3s\\).Fw\\(b\\).Fz\\(36px\\).Mb\\(-4px\\).D\\(ib\\)',
+                    '.Fw\\(b\\).Fz\\(36px\\).Mb\\(-4px\\).D\\(ib\\)',
+                    'fin-streamer[data-field="regularMarketPrice"]',
+                    'span[data-reactid*="price"]'
+                ]
+                
+                for selector in price_selectors:
+                    try:
+                        price_elem = soup.select_one(selector)
+                        if price_elem:
+                            price_text = price_elem.get_text().replace(',', '').strip()
+                            # Extract numeric value
+                            import re
+                            price_match = re.search(r'(\d+\.?\d*)', price_text)
+                            if price_match:
+                                current_price4 = float(price_match.group(1))
+                                if current_price4 > 0:
+                                    print(f"✅ Yahoo Page Scraping - {ticker}: ${current_price4:.2f}")
+                                    return float(current_price4)
+                    except Exception as selector_error:
+                        continue
+                        
+                # Try to find any element with a price-like pattern
+                import re
+                price_pattern = re.compile(r'\$?(\d{1,4}(?:,\d{3})*(?:\.\d{2})?)')
+                all_text = soup.get_text()
+                for match in price_pattern.finditer(all_text):
+                    try:
+                        potential_price = float(match.group(1).replace(',', ''))
+                        # Basic validation: stock price should be between $0.01 and $10000
+                        if 0.01 <= potential_price <= 10000:
+                            print(f"✅ Yahoo Page Pattern Match - {ticker}: ${potential_price:.2f}")
+                            return float(potential_price)
+                    except:
+                        continue
+                        
+        except Exception as scrape_error:
+            print(f"⚠️ Yahoo page scraping failed for {ticker}: {scrape_error}")
+        
+    except Exception as e:
+        print(f"❌ All alternative methods failed for {ticker}: {e}")
+    
+    print(f"❌ Could not fetch {ticker} from any alternative source")
+    return None
+
+
 def _assess_data_quality(data_sources, target_prices):
     """Assess if data quality is sufficient to skip additional sources"""
     if not data_sources:
@@ -246,7 +375,9 @@ def get_stock_prices_fast(portfolio_tickers):
             # Add delay to avoid rate limiting
             import time
             import random
-            time.sleep(random.uniform(0.5, 1.5))  # Random delay 0.5-1.5 seconds
+            # Always use longer delays to avoid 429 errors
+            delay = random.uniform(3.0, 5.0)  # Increased delay to prevent rate limiting
+            time.sleep(delay)
             
             stock = yf.Ticker(ticker)
             # Try fast_info first, then regular info
@@ -259,8 +390,8 @@ def get_stock_prices_fast(portfolio_tickers):
             except Exception as e:
                 print(f"📊 {ticker}: fast_info failed ({e}), trying info...")
                 
-            # Add another small delay before trying info
-            time.sleep(0.5)
+            # Add another delay before trying info to prevent rate limiting
+            time.sleep(2.0)
             
             # Fallback to regular info
             info = stock.info
@@ -285,17 +416,36 @@ def get_stock_prices_fast(portfolio_tickers):
                         return ticker, round(float(last_close), 2)
             except Exception as hist_error:
                 print(f"📊 {ticker}: history fallback failed: {hist_error}")
+            
+            # Last resort: try alternative API
+            print(f"📊 {ticker}: trying alternative API...")
+            alt_price = get_alternative_price(ticker)
+            if alt_price:
+                return ticker, round(float(alt_price), 2)
                 
         except Exception as e:
             print(f"❌ Error fetching {ticker}: {e}")
             # If rate limited, suggest retrying
             if "429" in str(e):
-                print(f"⚠️ {ticker}: Rate limited - will try again later")
+                print(f"⚠️ {ticker}: Rate limited - trying alternative API...")
+                
+                # Try alternative API when Yahoo fails
+                alt_price = get_alternative_price(ticker)
+                if alt_price:
+                    return ticker, round(float(alt_price), 2)
+        
+        # Last resort: try alternative API if everything else failed
+        print(f"📊 {ticker}: all Yahoo methods failed, trying alternative API...")
+        alt_price = get_alternative_price(ticker)
+        if alt_price:
+            return ticker, round(float(alt_price), 2)
         
         return ticker, None
     
     # Use ThreadPoolExecutor with very limited concurrency to avoid rate limits
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    # Always use 1 worker to prevent 429 errors - sequential processing is more reliable
+    max_workers = 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_ticker = {executor.submit(fetch_single_price, ticker): ticker for ticker in portfolio_tickers}
         
         for future in as_completed(future_to_ticker):

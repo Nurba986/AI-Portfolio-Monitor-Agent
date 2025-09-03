@@ -9,13 +9,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 import pytz
-
-# Temporary: Use environment variables instead of secret manager
-def get_required_secret(key):
-    return os.environ.get(key)
-
-def get_secret(key, default=None):
-    return os.environ.get(key, default)
+from .secret_manager import get_required_secret, get_secret
 
 
 def _setup_smtp_connection():

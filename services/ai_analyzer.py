@@ -10,9 +10,7 @@ import time
 import random
 from datetime import datetime, timezone
 from .utils import format_number, format_percentage
-# Temporary: Use environment variables instead of secret manager
-def get_required_secret(key):
-    return os.environ.get(key)
+from .secret_manager import get_required_secret
 
 
 def create_claude_analysis_prompt(ticker, financials, analyst_data):
